@@ -24,6 +24,7 @@ from .ecoflow.const import (  # noqa: E402
     DEVICE_TYPE_POWERPULSE2,
     DEVICE_TYPE_POWERSTREAM,
     DEVICE_TYPE_SMART_METER,
+    DEVICE_TYPE_SMART_PANEL_40,
     DEVICE_TYPE_SMARTPLUG,
     DEVICE_TYPE_SOLAR_TRACKER,
     DEVICE_TYPE_STREAM,
@@ -36,6 +37,9 @@ from .ecoflow.const import (  # noqa: E402
     device_log_tag,  # noqa: F401
     get_device_name,  # noqa: F401
     get_device_type,  # noqa: F401
+)
+from .ecoflow.parsers.hr61_proto import (
+    CIRCUIT_COUNT as SMARTPANEL40_CIRCUIT_COUNT,  # noqa: E402
 )
 from .ecoflow.parsers.ocean2_proto import (
     MAX_MODULES as OCEAN2_MAX_MODULES,  # noqa: E402
@@ -392,6 +396,7 @@ DEVICE_TYPE_DISPLAY_NAMES: dict[str, str] = {
     DEVICE_TYPE_WAVE3: "WAVE 3",
     DEVICE_TYPE_POWERPULSE2: "PowerPulse 2",
     DEVICE_TYPE_OCEAN2: "Ocean 2",
+    DEVICE_TYPE_SMART_PANEL_40: "OCEAN Smart Electrical Panel 40",
 }
 
 # Device types that only report over the account channel (app-auth WSS).
@@ -405,6 +410,7 @@ ENHANCED_ONLY_DEVICE_TYPES: frozenset[str] = frozenset(
         DEVICE_TYPE_WAVE3,
         DEVICE_TYPE_POWERPULSE2,
         DEVICE_TYPE_OCEAN2,
+        DEVICE_TYPE_SMART_PANEL_40,
     }
 )
 
@@ -469,6 +475,14 @@ class EcoFlowSensorDef:
     # every device. Only set it where zero genuinely means "not fitted", never
     # where zero is a legitimate reading.
     accessory_needs_nonzero: bool = False
+    # Entity name built from a per-device label, for readings that repeat per
+    # slot and that the owner names in the app (the Smart Panel 40's
+    # circuits). The translation carries `{label}`; the entity fills it with
+    # `label`, followed by the text the device reports under `label_key` when
+    # it has one ("12 Oven"), or `label` alone ("12"). One translation serves
+    # every slot instead of one per slot.
+    label: str | None = None
+    label_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -487,6 +501,12 @@ class EcoFlowBinarySensorDef:
     # not have, so the entity is only created once the device has actually
     # reported the key. See _watch_for_accessory() in binary_sensor.py.
     accessory: bool = False
+    # Display name lookup where it must differ from the key, as on the
+    # sensor definition. Defaults to the key.
+    translation_key: str | None = None
+    # Same meaning as on the sensor definition.
+    label: str | None = None
+    label_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -6968,7 +6988,7 @@ WAVE3_SELECTS: list[EcoFlowSelectDef] = [
 #
 # All entries are `enhanced_only`: developer keys never carry this device's
 # telemetry, only the app/Enhanced Mode channel does.
-# Ocean 2 (`RE11`, `RE17`). Enhanced mode only - the Developer API answers
+# Ocean 2 (`RE11`, `RE17`, `RE41`). Enhanced mode only - the Developer API answers
 # error 1006 for this device, so every value here comes from the protobuf
 # stream.
 #
@@ -7733,6 +7753,319 @@ def _build_ocean2_module_sensors(module_num: int) -> list[EcoFlowSensorDef]:
 
 for _module_num in range(1, OCEAN2_MAX_MODULES + 1):
     OCEAN2_SENSORS.extend(_build_ocean2_module_sensors(_module_num))
+
+
+# OCEAN Smart Electrical Panel 40 (`HR61`). Enhanced mode only: the one
+# capture on record came over the app channel. Read-only, and no energy
+# counters: none appear in the panel's push, and integrating power locally
+# would invent a second source for a figure the panel may report elsewhere.
+# Per-circuit entities are created from the circuits the panel reports.
+SMARTPANEL40_SENSORS: list[EcoFlowSensorDef] = [
+    # Signed: positive = import from grid, negative = export.
+    EcoFlowSensorDef(
+        "grid_power_w",
+        "Grid Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:transmission-tower",
+        suggested_display_precision=0,
+        translation_key="grid_w",
+        enhanced_only=True,
+    ),
+    # Computed by the panel from grid, solar and battery power, not a
+    # second measurement.
+    EcoFlowSensorDef(
+        "load_power_w",
+        "Home Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:home-lightning-bolt",
+        suggested_display_precision=0,
+        translation_key="home_w",
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "pv_power_w",
+        "Solar Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:solar-power",
+        suggested_display_precision=0,
+        translation_key="solar_w",
+        enhanced_only=True,
+    ),
+    # Signed: positive = charging, negative = discharging.
+    EcoFlowSensorDef(
+        "battery_power_w",
+        "Battery Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:battery-charging",
+        suggested_display_precision=0,
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "battery_soc_pct",
+        "Battery SOC",
+        "%",
+        "battery",
+        "measurement",
+        "mdi:battery",
+        suggested_display_precision=0,
+        translation_key="soc_pct",
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "grid_l1_voltage_v",
+        "Grid L1 Voltage",
+        "V",
+        "voltage",
+        "measurement",
+        "mdi:sine-wave",
+        suggested_display_precision=0,
+        translation_key="grid_leg_l1_voltage_v",
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "grid_l2_voltage_v",
+        "Grid L2 Voltage",
+        "V",
+        "voltage",
+        "measurement",
+        "mdi:sine-wave",
+        suggested_display_precision=0,
+        translation_key="grid_leg_l2_voltage_v",
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "grid_l1_current_a",
+        "Grid L1 Current",
+        "A",
+        "current",
+        "measurement",
+        "mdi:current-ac",
+        suggested_display_precision=2,
+        translation_key="grid_leg_l1_current_a",
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "grid_l2_current_a",
+        "Grid L2 Current",
+        "A",
+        "current",
+        "measurement",
+        "mdi:current-ac",
+        suggested_display_precision=2,
+        translation_key="grid_leg_l2_current_a",
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "grid_l1_power_w",
+        "Grid L1 Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:transmission-tower",
+        suggested_display_precision=0,
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "grid_l2_power_w",
+        "Grid L2 Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:transmission-tower",
+        suggested_display_precision=0,
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "grid_l1_apparent_power_va",
+        "Grid L1 Apparent Power",
+        "VA",
+        "apparent_power",
+        "measurement",
+        "mdi:flash",
+        entity_category="diagnostic",
+        suggested_display_precision=0,
+        disabled_by_default=True,
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "grid_l2_apparent_power_va",
+        "Grid L2 Apparent Power",
+        "VA",
+        "apparent_power",
+        "measurement",
+        "mdi:flash",
+        entity_category="diagnostic",
+        suggested_display_precision=0,
+        disabled_by_default=True,
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "grid_l1_reactive_power_var",
+        "Grid L1 Reactive Power",
+        "var",
+        "reactive_power",
+        "measurement",
+        "mdi:flash-outline",
+        entity_category="diagnostic",
+        suggested_display_precision=0,
+        disabled_by_default=True,
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "grid_l2_reactive_power_var",
+        "Grid L2 Reactive Power",
+        "var",
+        "reactive_power",
+        "measurement",
+        "mdi:flash-outline",
+        entity_category="diagnostic",
+        suggested_display_precision=0,
+        disabled_by_default=True,
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "backup_reserve_pct",
+        "Backup Reserve",
+        "%",
+        None,
+        "measurement",
+        "mdi:battery-lock",
+        entity_category="diagnostic",
+        suggested_display_precision=0,
+        disabled_by_default=True,
+        enhanced_only=True,
+    ),
+    # Grid-code block, sent once per full state: the nominal values the
+    # panel is configured for, not live measurements.
+    EcoFlowSensorDef(
+        "grid_nominal_voltage_v",
+        "Grid Nominal Voltage",
+        "V",
+        "voltage",
+        None,
+        "mdi:sine-wave",
+        entity_category="diagnostic",
+        suggested_display_precision=0,
+        disabled_by_default=True,
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "grid_nominal_frequency_hz",
+        "Grid Nominal Frequency",
+        "Hz",
+        "frequency",
+        None,
+        "mdi:sine-wave",
+        entity_category="diagnostic",
+        suggested_display_precision=1,
+        disabled_by_default=True,
+        enhanced_only=True,
+    ),
+    EcoFlowSensorDef(
+        "grid_code",
+        "Grid Code",
+        None,
+        None,
+        None,
+        "mdi:file-certificate-outline",
+        entity_category="diagnostic",
+        suggested_display_precision=0,
+        disabled_by_default=True,
+        enhanced_only=True,
+    ),
+]
+
+
+def _build_smartpanel40_circuit_sensors(circuit: int) -> list[EcoFlowSensorDef]:
+    """Build the sensor definitions for one Smart Panel 40 circuit.
+
+    Accessories: created once the panel reports the circuit, so a panel with
+    fewer circuits wired never shows empty ones. Power is signed from the
+    circuit's side: positive while it draws, negative while it feeds the
+    panel (a battery or generator breaker). Voltage sits near the leg voltage
+    and current is reported in whole amps only, so both start disabled.
+    """
+    c = f"circuit_{circuit}"
+    label = str(circuit)
+    label_key = f"{c}_name"
+    return [
+        EcoFlowSensorDef(
+            f"{c}_power_w",
+            f"Circuit {circuit} Power",
+            "W",
+            "power",
+            "measurement",
+            "mdi:flash",
+            suggested_display_precision=0,
+            translation_key="circuit_power_w",
+            label=label,
+            label_key=label_key,
+            accessory=True,
+            enhanced_only=True,
+        ),
+        EcoFlowSensorDef(
+            f"{c}_voltage_v",
+            f"Circuit {circuit} Voltage",
+            "V",
+            "voltage",
+            "measurement",
+            "mdi:sine-wave",
+            entity_category="diagnostic",
+            suggested_display_precision=0,
+            disabled_by_default=True,
+            translation_key="circuit_voltage_v",
+            label=label,
+            label_key=label_key,
+            accessory=True,
+            enhanced_only=True,
+        ),
+        EcoFlowSensorDef(
+            f"{c}_current_a",
+            f"Circuit {circuit} Current",
+            "A",
+            "current",
+            "measurement",
+            "mdi:current-ac",
+            entity_category="diagnostic",
+            suggested_display_precision=0,
+            disabled_by_default=True,
+            translation_key="circuit_current_a",
+            label=label,
+            label_key=label_key,
+            accessory=True,
+            enhanced_only=True,
+        ),
+    ]
+
+
+for _circuit in range(1, SMARTPANEL40_CIRCUIT_COUNT + 1):
+    SMARTPANEL40_SENSORS.extend(_build_smartpanel40_circuit_sensors(_circuit))
+
+# Whether each circuit's breaker is closed, as the panel reports it. State
+# only: switching a circuit needs a write path with read-back, which does not
+# exist yet.
+SMARTPANEL40_BINARY_SENSORS: list[EcoFlowBinarySensorDef] = [
+    EcoFlowBinarySensorDef(
+        f"circuit_{_circuit}_on",
+        f"Circuit {_circuit} On",
+        "power",
+        "mdi:electric-switch",
+        enhanced_only=True,
+        accessory=True,
+        translation_key="circuit_on",
+        label=str(_circuit),
+        label_key=f"circuit_{_circuit}_name",
+    )
+    for _circuit in range(1, SMARTPANEL40_CIRCUIT_COUNT + 1)
+]
 
 
 POWERPULSE2_SENSORS: list[EcoFlowSensorDef] = [

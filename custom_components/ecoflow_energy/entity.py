@@ -87,6 +87,48 @@ def raise_set_rejected(entity_id: str, reason: str) -> NoReturn:
 
 
 @callback
+def accessory_ready(
+    coordinator: EcoFlowDeviceCoordinator,
+    key: str,
+    label_key: str | None,
+    needs_nonzero: bool = False,
+) -> bool:
+    """Return whether an accessory entity can be created now.
+
+    The reading has to be reported, and for an entity named from a device
+    label (`label_key`) the label as well: the name is read once at creation
+    and the entity_id is generated from it, so an entity created from a push
+    that carried the reading but not the label would keep a name without it.
+    """
+    if not reading_reported(coordinator, key, needs_nonzero):
+        return False
+    return label_key is None or reading_reported(coordinator, label_key)
+
+
+def label_placeholders(
+    coordinator: EcoFlowDeviceCoordinator, label: str | None, label_key: str | None
+) -> dict[str, str] | None:
+    """Return the `{label}` placeholder for a definition that carries one.
+
+    The fixed part (a slot number) always leads, so the entity keeps a
+    readable name on a device that has not reported the owner's text yet; the
+    owner's own text follows when the device has sent it. Read once, when the
+    entity is created: a name the owner changes later in the app shows after
+    the next reload, the same as any renamed device.
+    """
+    if label is None:
+        return None
+    text = ""
+    if label_key:
+        for store in (coordinator.device_data, coordinator.data or {}):
+            value = store.get(label_key)
+            if isinstance(value, str) and value.strip():
+                text = value.strip()
+                break
+    return {"label": f"{label} {text}" if text else label}
+
+
+@callback
 def reading_reported(
     coordinator: EcoFlowDeviceCoordinator, key: str, needs_nonzero: bool = False
 ) -> bool:

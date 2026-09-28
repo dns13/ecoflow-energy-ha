@@ -21,6 +21,7 @@ from .const import (
     DEVICE_TYPE_POWEROCEAN,
     DEVICE_TYPE_POWERPULSE2,
     DEVICE_TYPE_SMART_METER,
+    DEVICE_TYPE_SMART_PANEL_40,
     DEVICE_TYPE_SMARTPLUG,
     DEVICE_TYPE_STREAM,
     DEVICE_TYPE_STREAM_AC5000,
@@ -29,6 +30,7 @@ from .const import (
     POWEROCEAN_BINARY_SENSORS,
     POWERPULSE2_BINARY_SENSORS,
     SMARTMETER_BINARY_SENSORS,
+    SMARTPANEL40_BINARY_SENSORS,
     SMARTPLUG_BINARY_SENSORS,
     STREAM_BINARY_SENSORS,
     STREAMAC5000_BINARY_SENSORS,
@@ -37,7 +39,7 @@ from .const import (
     filter_defs_for_serial,
 )
 from .coordinator import EcoFlowDeviceCoordinator
-from .entity import EcoFlowWriteGateMixin, reading_reported
+from .entity import EcoFlowWriteGateMixin, accessory_ready, label_placeholders
 
 _ENTITY_CATEGORY_MAP = {
     "diagnostic": EntityCategory.DIAGNOSTIC,
@@ -64,7 +66,9 @@ async def async_setup_entry(
         for defn in defs:
             if defn.enhanced_only and not coordinator.enhanced_mode:
                 continue
-            if defn.accessory and not reading_reported(coordinator, defn.key):
+            if defn.accessory and not accessory_ready(
+                coordinator, defn.key, defn.label_key
+            ):
                 pending.append(defn)
                 continue
             entities.append(EcoFlowBinarySensor(coordinator, defn))
@@ -95,7 +99,7 @@ def _watch_for_accessory(
         ready = [
             definition
             for definition in pending
-            if reading_reported(coordinator, definition.key)
+            if accessory_ready(coordinator, definition.key, definition.label_key)
         ]
         for definition in ready:
             pending.remove(definition)
@@ -125,8 +129,13 @@ class EcoFlowBinarySensor(
         super().__init__(coordinator)
         self._definition = definition
         self._attr_unique_id = f"{coordinator.device_sn}_{definition.key}"
-        self._attr_translation_key = definition.key
+        self._attr_translation_key = definition.translation_key or definition.key
         self._attr_icon = definition.icon
+        placeholders = label_placeholders(
+            coordinator, definition.label, definition.label_key
+        )
+        if placeholders:
+            self._attr_translation_placeholders = placeholders
 
         if definition.device_class:
             self._attr_device_class = BinarySensorDeviceClass(definition.device_class)
@@ -192,4 +201,6 @@ def _get_binary_sensor_defs(
         return WAVE3_BINARY_SENSORS
     if device_type == DEVICE_TYPE_POWERPULSE2:
         return POWERPULSE2_BINARY_SENSORS
+    if device_type == DEVICE_TYPE_SMART_PANEL_40:
+        return SMARTPANEL40_BINARY_SENSORS
     return []
