@@ -24,6 +24,7 @@ from .powerocean import (
     _WORK_MODE_MAP,
     _WORK_STATE_MAP,
     ENERGY_TOTAL_PLACEHOLDER_WH,
+    PARALLEL_UNIT_MAX,
     drop_invalid_percentages,
 )
 
@@ -329,6 +330,67 @@ def remap_proto_keys(raw: dict[str, Any]) -> dict[str, Any]:
 
     drop_invalid_percentages(result)
 
+    return result
+
+
+# Unit row field -> reading suffix. `sys_grid_pwr` is left out on purpose: on
+# a unit row it is the flow between the two units (near-equal and opposite on
+# the two rows while the total row sits near zero), not the property's grid
+# connection, and Grid Power stays the one sensor for that. `sys_load_pwr` is
+# left out for the same kind of reason: the two unit rows split the house load
+# by where the inverter sits, which is not a figure an owner can act on, and
+# the issue asks for solar, battery and charge level only.
+_PARALLEL_UNIT_MAP: dict[str, str] = {
+    "mppt_pwr": "solar_w",
+    "bp_pwr": "batt_w",
+    "bp_soc": "soc_pct",
+}
+# A unit row is a full snapshot like the total row, and proto3 leaves a
+# zero float off the wire: the unit without PV sends no `mppt_pwr` at all.
+# Without the fill its Solar Power would never leave `unknown`, and the other
+# unit's would hold its last daylight value through the night.
+_PARALLEL_UNIT_ZERO_FILL = ("mppt_pwr", "bp_pwr")
+
+
+def remap_parallel_unit_keys(
+    rows: list[dict[str, Any]], unit_sn_to_index: dict[str, int]
+) -> dict[str, Any]:
+    """Map the unit rows of a parallel energy stream (96/50) to per-inverter keys.
+
+    Each row is numbered by its serial, never by its position, so a unit keeps
+    its number for as long as the integration runs. New serials are only
+    numbered from a list that brings `PARALLEL_UNIT_MAX` units at once - every
+    list on record does - and then in sorted order, so the numbering is the
+    same after every restart. A list naming one unit alone before that has
+    happened is not numbered at all: taken as it came, the unit whose serial
+    sorts second would become Inverter 1 whenever it happened to arrive
+    first, and the history under that name would switch units. A serial first
+    seen after every slot is taken gets none, so a slot can never move to
+    another unit. The serial itself never reaches a key or a value.
+
+    Args:
+        rows: The unit rows, each carrying `dev_sn`; rows without one are skipped.
+        unit_sn_to_index: Mutable serial-to-slot mapping (updated in place).
+    """
+    result: dict[str, Any] = {}
+    stamped = [
+        row for row in rows if isinstance(row.get("dev_sn"), str) and row["dev_sn"]
+    ]
+    complete = len(stamped) >= PARALLEL_UNIT_MAX
+    for row in sorted(stamped, key=lambda row: row["dev_sn"]):
+        sn = row["dev_sn"]
+        if sn not in unit_sn_to_index:
+            if not complete or len(unit_sn_to_index) >= PARALLEL_UNIT_MAX:
+                continue
+            unit_sn_to_index[sn] = len(unit_sn_to_index) + 1
+        prefix = f"inverter_{unit_sn_to_index[sn]}"
+        for proto_key, suffix in _PARALLEL_UNIT_MAP.items():
+            value = row.get(proto_key)
+            if value is None and proto_key in _PARALLEL_UNIT_ZERO_FILL:
+                value = 0.0
+            if value is not None:
+                result[f"{prefix}_{suffix}"] = float(value)
+    drop_invalid_percentages(result)
     return result
 
 

@@ -135,9 +135,10 @@ def _build_powerocean_table(pb2: Any) -> dict[tuple[int, int], CmdConfig]:
         # row without a serial that carries the system totals. The total row
         # is the one a single device would have sent on cmd_id=33, so it
         # takes the same renames, the same zero-fill and the same flags and
-        # lands on the same sensor keys. The unit rows are not read here: a
-        # per-unit entity set is its own change, and a unit row's grid figure
-        # is the flow between the units, not the meter.
+        # lands on the same sensor keys. The unit rows travel on beside it
+        # for the per-inverter readings (#436), mapped by
+        # `remap_parallel_unit_keys`; a unit row's grid figure is the flow
+        # between the units, not the meter, and is not read from them.
         (96, 50): CmdConfig(
             msg_class=pb2.JTS1ParallelEnergyStreamReport,
             parse_path="typed_runtime:parallel_energy_stream_report",
@@ -537,14 +538,21 @@ def _typed_runtime_map(
 
     # 3. For repeated messages, pick the item that stands for the device:
     # the one the command's selector names, or else the first (keeping the
-    # whole list as `all_packs` for the multi-pack extraction).
+    # whole list as `all_packs` for the multi-pack extraction). The items a
+    # selector passes over travel on under the private key `_unit_rows`,
+    # outside `_available_keys` and every public key, because each carries a
+    # serial; the caller maps the readings it wants from them (#436).
+    unit_rows: list[dict[str, Any]] | None = None
     if config.flatten_key and config.flatten_select is not None:
-        items = fields.get(config.flatten_key, [])
-        chosen = config.flatten_select(
-            [item for item in items if isinstance(item, dict)]
-        )
+        items = [
+            item
+            for item in fields.get(config.flatten_key, [])
+            if isinstance(item, dict)
+        ]
+        chosen = config.flatten_select(items)
         if chosen is None:
             return None
+        unit_rows = [item for item in items if item is not chosen]
         fields = chosen
     elif config.flatten_key:
         items = fields.get(config.flatten_key, [])
@@ -588,6 +596,8 @@ def _typed_runtime_map(
             mapped["_available_keys"].add(key)
 
     mapped["_flat_count"] = len(fields)
+    if unit_rows is not None:
+        mapped["_unit_rows"] = unit_rows
 
     # 7. Undeclared field numbers, for diagnostics only. Recorded solely when
     # the message also produced declared fields: protobuf accepts arbitrary

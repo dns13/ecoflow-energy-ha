@@ -512,9 +512,10 @@ class TestPowerOceanSensors:
     def test_existing_sensors_count(self):
         """Core sensor count, excluding optional Plus and extended EMS fields.
 
-        Includes the accessory readings (heating rod, wallbox, and the eight
-        scheduled-charge slots): they are defined on the PowerOcean and gated
-        at entity creation, not here.
+        Includes the accessory readings (heating rod, wallbox, the eight
+        scheduled-charge slots and the six per-inverter readings of a
+        parallel pair): they are defined on the PowerOcean and gated at entity
+        creation, not here.
         """
         keys = _extract_sensor_keys("POWEROCEAN_SENSORS")
         non_pack = [k for k in keys if not k.startswith("pack")]
@@ -525,7 +526,7 @@ class TestPowerOceanSensors:
         }
         ems_extended = _PO_EMS_EXTENDED
         original = [k for k in non_pack if k not in ems_extended and k not in mppt_plus]
-        assert len(original) == 81, f"Expected 81 core sensors, got {len(original)}"
+        assert len(original) == 87, f"Expected 87 core sensors, got {len(original)}"
 
     def test_mppt_plus_sensor_count(self):
         """6 PowerOcean Plus MPPT sensors (strings 3 and 4)."""
@@ -558,9 +559,9 @@ class TestPowerOceanSensors:
         assert len(found) == 28, f"Expected 28 EMS extended sensors, got {len(found)}"
 
     def test_total_sensor_count(self):
-        """Total PowerOcean sensors = 81 + 6 + 120 + 28 = 235."""
+        """Total PowerOcean sensors = 87 + 6 + 120 + 28 = 241."""
         keys = _extract_sensor_keys("POWEROCEAN_SENSORS")
-        assert len(keys) == 235, f"Expected 235 total sensors, got {len(keys)}"
+        assert len(keys) == 241, f"Expected 241 total sensors, got {len(keys)}"
 
     def test_only_soc_has_battery_device_class(self):
         """Only the primary soc_pct should have device_class='battery'.
@@ -782,6 +783,26 @@ class TestDelta3Energy:
             assert energy_key in sensor_keys, (
                 f"Target energy sensor missing: {energy_key}"
             )
+
+
+class TestPowerOceanPerInverterSensors:
+    """The six per-inverter readings of a parallel pair (#436)."""
+
+    def test_they_are_enhanced_only_accessories(self):
+        """The 96/50 list only arrives on the app channel and only from a
+        pair: with developer keys, or on a single unit, they would be created
+        and never fill."""
+        from ecoflow_energy.const import POWEROCEAN_SENSORS
+
+        defs = [s for s in POWEROCEAN_SENSORS if s.key.startswith("inverter_")]
+        assert {d.key for d in defs} == {
+            f"inverter_{n}_{suffix}"
+            for n in (1, 2)
+            for suffix in ("solar_w", "batt_w", "soc_pct")
+        }
+        for definition in defs:
+            assert definition.enhanced_only, definition.key
+            assert definition.accessory, definition.key
 
 
 class TestBatteryDeviceClassSingleton:
