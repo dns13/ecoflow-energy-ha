@@ -33,7 +33,6 @@ _LOGGER = logging.getLogger(__name__)
 # Proto enum sensor keys present in EMS Change Report (cmd_id=8).
 # With oneof wrappers in the proto, zero-values are preserved.
 _PROTO_ENUM_INT: dict[str, dict[int, str]] = {
-    "grid_status": _GRID_STATUS_MAP,
     "batt_charge_discharge_state": _CHG_DSG_STATE_MAP,
     "ems_feed_mode": _FEED_MODE_MAP,
     "ems_work_mode": _WORK_MODE_INT_MAP,
@@ -64,11 +63,20 @@ _WIFI_ETH_KEYS: frozenset[str] = frozenset({"wifi_status", "ethernet_status"})
 def _apply_enum_mappings(result: dict[str, Any]) -> None:
     """Apply all enum and connectivity mappings to sensor-keyed result in place.
 
-    Unknown integer values (e.g. firmware adding new states) are dropped
-    rather than passed through, because HA's enum sensors raise
+    Unknown integer values (e.g. firmware adding new states) are never
+    passed through, because HA's enum sensors raise
     ``ValueError: state value 'N' not in options`` for any value not in
-    the declared options list.
+    the declared options list. Most enums drop the key; ``grid_status`` is
+    set to ``None`` so that an unknown code clears the previous state.
     """
+    if "grid_status" in result:
+        raw_grid = result["grid_status"]
+        # The value arrives as a float here, so a bool cannot reach this check.
+        result["grid_status"] = (
+            _GRID_STATUS_MAP.get(int(raw_grid))
+            if isinstance(raw_grid, (int, float)) and raw_grid in (0, 1)
+            else None
+        )
     for sensor_key, mapping in _PROTO_ENUM_INT.items():
         if sensor_key in result:
             value = result[sensor_key]
@@ -122,12 +130,8 @@ def _apply_enum_mappings(result: dict[str, Any]) -> None:
             raw_val = str(result[sensor_key])
             result[sensor_key] = str_mapping.get(raw_val, raw_val)
 
-    # grid_is_energized (bool, field 752) overrides sys_grid_sta when present.
-    # The EcoFlow app uses gridIsEnergized for the main grid display.
-    if "grid_is_energized" in result:
-        result["grid_status"] = (
-            "ok" if result.pop("grid_is_energized") else "not_detected"
-        )
+    # Energized output can be supplied by backup; it cannot establish grid state.
+    result.pop("grid_is_energized", None)
 
 
 # EnergyStream (fast ~3s updates): proto key -> sensor key
@@ -207,10 +211,10 @@ EMS_CHANGE_TO_SENSOR: dict[str, str] = {
 #
 # That is not hypothetical. In the R374 bundle the phase containers report
 # 237 V on all three phases and -3725 W of export while cmd 17 reports
-# `sys_grid_sta = 0` and `bp_chg_dsg_sta = 2` - "grid not detected" and
-# "discharging" on a grid-exporting unit whose battery power is zero. Under
-# the cmd-8 table those two values would land on `grid_status` and
-# `batt_charge_discharge_state` and be visibly wrong. The same reasoning
+# `sys_grid_sta = 0` and `bp_chg_dsg_sta = 2` - "on-grid" and "discharging"
+# on a grid-exporting unit whose battery power is zero. The battery state
+# contradicts the bundle; the matching grid state alone does not establish
+# the cmd-17 mapping for `grid_status`. The same reasoning
 # excludes `sys_work_sta`, `ems_work_state`, `bp_soc`, `bp_online_sum` and
 # the two lifetime energy counters (0 in every observed frame).
 #
@@ -475,7 +479,6 @@ def flatten_heartbeat(raw: dict[str, Any]) -> dict[str, Any]:
     # assumption. The schema carries no phase identifier there. It holds on the
     # observed hardware and is currently unobservable anyway, because the phase
     # container overwrites every key the load container can contribute.
-    reported_vols: list[float] = []
     collected: dict[str, dict[str, float]] = {}
 
     def _collect(
@@ -483,9 +486,6 @@ def flatten_heartbeat(raw: dict[str, Any]) -> dict[str, Any]:
         phase: dict[str, Any],
         fields: tuple[tuple[str, str], ...],
     ) -> None:
-        vol = phase.get("vol")
-        if isinstance(vol, (int, float)) and not isinstance(vol, bool):
-            reported_vols.append(float(vol))
         # Created unconditionally, before any field is read. A container that
         # arrives with every scalar at its proto3 default carries no fields at
         # all, and that is exactly the dead-grid case whose zeros must still be
@@ -541,18 +541,8 @@ def flatten_heartbeat(raw: dict[str, Any]) -> dict[str, Any]:
             for suffix in ("reactive_power_var", "apparent_power_va"):
                 result[f"grid_phase_{label}_{suffix}"] = values.get(suffix, 0.0)
 
-    # Derive grid_status from phase voltage when not set by grid_is_energized.
-    # sys_grid_sta is unreliable (always 0). The EcoFlow app uses gridIsEnergized
-    # which is computed app-side, not sent by the device. We replicate that logic:
-    # if any phase voltage > 50V, the grid is energized.
-    #
-    # Only reported voltages count. The zero-fill above writes 0.0 for every
-    # omitted scalar, so a phase message carrying just power would otherwise
-    # report a live grid as "not_detected".
-    if "grid_status" not in result and reported_vols:
-        result["grid_status"] = (
-            "ok" if any(value > 50.0 for value in reported_vols) else "not_detected"
-        )
+    # PCS voltage can remain live during islanded backup. Only the explicit
+    # EMS change report determines the grid connection state.
 
     return result
 

@@ -4055,21 +4055,21 @@ class TestHeartbeatExtraction:
         assert result["grid_phase_a_active_power_w"] == -2200.0
         assert result["grid_phase_b_voltage_v"] == 231.0
 
-    async def test_grid_status_derived_from_phase_voltage(
+    async def test_live_phase_voltage_does_not_establish_grid_status(
         self,
     ) -> None:
-        """Grid status derived as 'ok' when phase A voltage > 50V."""
+        """Live backup voltage must not establish grid connection."""
         raw = {"pcs_a_phase": {"vol": 230.0, "amp": 10.0, "act_pwr": -2000.0}}
         result = flatten_heartbeat(raw)
-        assert result["grid_status"] == "ok"
+        assert "grid_status" not in result
 
-    async def test_grid_status_not_detected_low_voltage(
+    async def test_low_phase_voltage_does_not_establish_grid_status(
         self,
     ) -> None:
-        """Grid status 'not_detected' when phase A voltage <= 50V."""
+        """Low voltage alone must not establish grid connection."""
         raw = {"pcs_a_phase": {"vol": 0.0, "amp": 0.0, "act_pwr": 0.0}}
         result = flatten_heartbeat(raw)
-        assert result["grid_status"] == "not_detected"
+        assert "grid_status" not in result
 
     async def test_empty_heartbeat(
         self,
@@ -4118,7 +4118,7 @@ class TestBpRemapping:
 
         assert result["bp_online_sum"] == 2.0
         assert result["ems_feed_mode"] == "no_limit"
-        assert result["grid_status"] == "not_detected"
+        assert result["grid_status"] == "ok"
 
     async def test_ems_change_no_false_defaults(
         self,
@@ -4162,7 +4162,7 @@ class TestBpRemapping:
         }
         result = remap_bp_keys(raw, coordinator._bp_sn_to_index, coordinator.device_sn)
 
-        assert result["grid_status"] == "ok"
+        assert result["grid_status"] == "not_detected"
         assert result["batt_charge_discharge_state"] == "discharging"
         assert result["ems_feed_mode"] == "off"
         assert result["ems_work_mode"] == "self_use"
@@ -4197,36 +4197,35 @@ class TestBpRemapping:
         result = remap_bp_keys(raw, coordinator._bp_sn_to_index, coordinator.device_sn)
         assert result["ems_work_state"] == "none"
 
-    async def test_grid_is_energized_overrides_sys_grid_sta(
+    async def test_energized_flag_does_not_override_explicit_off_grid(
         self,
         hass: HomeAssistant,
         enhanced_config_entry: MockConfigEntry,
     ) -> None:
-        """grid_is_energized (bool) overrides sys_grid_sta for grid_status."""
+        """An energized backup output must not override explicit off-grid state."""
         enhanced_config_entry.add_to_hass(hass)
         coordinator = EcoFlowDeviceCoordinator(
             hass, enhanced_config_entry, MOCK_POWEROCEAN_DEVICE
         )
-        # sys_grid_sta=0 would normally be "not_detected", but grid_is_energized=True
-        # overrides
-        raw = {"sys_grid_sta": 0, "grid_is_energized": True}
+        # Backup can stay energized while EMS explicitly reports off-grid.
+        raw = {"sys_grid_sta": 1, "grid_is_energized": True}
         result = remap_bp_keys(raw, coordinator._bp_sn_to_index, coordinator.device_sn)
-        assert result["grid_status"] == "ok"
+        assert result["grid_status"] == "not_detected"
         assert "grid_is_energized" not in result  # consumed, not passed through
 
-    async def test_grid_is_energized_false(
+    async def test_energized_flag_false_alone_sets_no_grid_status(
         self,
         hass: HomeAssistant,
         enhanced_config_entry: MockConfigEntry,
     ) -> None:
-        """grid_is_energized=False maps to not_detected."""
+        """The energized flag alone does not establish grid connection."""
         enhanced_config_entry.add_to_hass(hass)
         coordinator = EcoFlowDeviceCoordinator(
             hass, enhanced_config_entry, MOCK_POWEROCEAN_DEVICE
         )
         raw = {"grid_is_energized": False}
         result = remap_bp_keys(raw, coordinator._bp_sn_to_index, coordinator.device_sn)
-        assert result["grid_status"] == "not_detected"
+        assert "grid_status" not in result
 
     async def test_energy_totals_wh_to_kwh(
         self,
@@ -5837,7 +5836,7 @@ class TestParseMessageGetReply:
         assert result is not None
         assert result.get("soc_pct") == 85
         assert result.get("ems_feed_mode") == "limit"
-        assert result.get("grid_status") == "ok"
+        assert result.get("grid_status") == "not_detected"
         assert result.get("pcs_ac_freq_hz") == 50.01
 
     async def test_powerocean_get_reply_proto_parsed(

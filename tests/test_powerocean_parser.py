@@ -729,15 +729,15 @@ class TestEMSState:
         result = parse_powerocean_http_quota(data)
         assert result["pcs_run_state"] == "running"
 
-    def test_grid_status_not_detected(self):
+    def test_grid_status_code_zero_reads_ok(self):
         data = {"ems_change_report.sysGridSta": 0}
         result = parse_powerocean_http_quota(data)
-        assert result["grid_status"] == "not_detected"
+        assert result["grid_status"] == "ok"
 
-    def test_grid_status_ok(self):
+    def test_grid_status_code_one_reads_not_detected(self):
         data = {"ems_change_report.sysGridSta": 1}
         result = parse_powerocean_http_quota(data)
-        assert result["grid_status"] == "ok"
+        assert result["grid_status"] == "not_detected"
 
     def test_power_factor(self):
         data = {"ems_change_report.pcsPfValue": 0.98}
@@ -1309,7 +1309,7 @@ class TestEnumStringReachability:
 
 
 class TestGridStatusFallbackAllPhases:
-    """Grid detection must consider all three phase voltages."""
+    """Phase voltage never establishes grid connection, including during backup."""
 
     def test_phase_b_energized_when_a_zero(self):
         from ecoflow_energy.ecoflow.parsers.powerocean_proto import (
@@ -1324,7 +1324,7 @@ class TestGridStatusFallbackAllPhases:
             ]
         }
         result = flatten_heartbeat(raw)
-        assert result["grid_status"] == "ok"
+        assert "grid_status" not in result
 
     def test_phase_a_missing_phase_c_energized(self):
         from ecoflow_energy.ecoflow.parsers.powerocean_proto import (
@@ -1333,9 +1333,9 @@ class TestGridStatusFallbackAllPhases:
 
         raw = {"pcs_c_phase": {"vol": 231.5}}
         result = flatten_heartbeat(raw)
-        assert result["grid_status"] == "ok"
+        assert "grid_status" not in result
 
-    def test_all_phases_low_not_detected(self):
+    def test_all_phases_low_does_not_establish_grid_status(self):
         from ecoflow_energy.ecoflow.parsers.powerocean_proto import (
             flatten_heartbeat,
         )
@@ -1348,7 +1348,7 @@ class TestGridStatusFallbackAllPhases:
             ]
         }
         result = flatten_heartbeat(raw)
-        assert result["grid_status"] == "not_detected"
+        assert "grid_status" not in result
 
     def test_no_phase_data_no_grid_status(self):
         from ecoflow_energy.ecoflow.parsers.powerocean_proto import (

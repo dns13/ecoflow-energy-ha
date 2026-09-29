@@ -329,7 +329,7 @@ def test_heartbeat_phase_snapshot_zero_fills_and_keeps_extended_power() -> None:
     assert result["grid_phase_b_current_a"] == 0.0
     assert result["grid_phase_b_active_power_w"] == 0.0
     assert result["grid_phase_c_current_a"] == 0.0
-    assert result["grid_status"] == "ok"
+    assert "grid_status" not in result
 
 
 def test_load_info_without_current_does_not_zero_the_phase_readings() -> None:
@@ -378,7 +378,7 @@ def test_load_info_without_current_does_not_zero_the_phase_readings() -> None:
     assert result["grid_phase_b_active_power_w"] == pytest.approx(-118.80214)
     assert result["grid_phase_c_active_power_w"] == pytest.approx(-207.72481)
     assert result["grid_phase_c_apparent_power_va"] == pytest.approx(261.17725)
-    assert result["grid_status"] == "ok"
+    assert "grid_status" not in result
 
 
 def test_load_info_only_phase_reports_zero_and_no_extended_power() -> None:
@@ -631,13 +631,15 @@ def test_cmd_17_reports_run_state_and_connectivity() -> None:
 
 
 def test_cmd_17_does_not_write_the_grid_and_battery_state_sensors() -> None:
-    """Its values for those contradict the rest of the same bundle.
+    """Its grid and battery fields do not have an established mapping.
 
     The phase containers in this bundle report 237 V on all three phases
     and -3725 W of export, while cmd_id=17 says `sys_grid_sta = 0` and
     `bp_chg_dsg_sta = 2`. Under the cmd_id=8 mapping that would publish
-    "grid not detected" and "discharging" for a grid-exporting unit whose
-    battery power is zero, so cmd_id=17 does not own these keys.
+    "on-grid" and "discharging" for a grid-exporting unit whose battery
+    power is zero. The battery state contradicts the bundle; the matching
+    grid state alone does not establish the cmd_id=17 mapping, so it does
+    not own these keys.
     """
     sensors = _ems_state_keys(_R374_GET_ALL_FIXTURE.read_bytes())
 
