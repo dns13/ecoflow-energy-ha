@@ -285,15 +285,23 @@ def _grid_phases(blocks: list[Any]) -> dict[str, float]:
 
     Each occurrence holds one repeated field 1 per grid phase, the phase
     index in field 5 (1/2/3 -> a/b/c) and the phase voltage in field 1.
-    Field 3 carries the AC frequency, the same value on every record rather
-    than one per phase, so it is published once as `pcs_ac_freq_hz` instead
-    of per phase.
+    Field 3 carries the AC frequency. A three-phase unit repeats it on every
+    record, a single-phase unit fills it only on the phase A record and sends
+    0.0 on the unindexed and the unused phase records. It is therefore
+    published once as `pcs_ac_freq_hz`, and it is the frequency of the phase
+    A record (index 1) as sent, 0.0 included: a grid outage reads 0.0 Hz next
+    to the 0 V of the same record instead of leaving the last frequency in
+    place. Only when phase A carries no frequency field does the first other
+    indexed record with a frequency above zero stand in. Unindexed records
+    never supply it, and with neither source the key is absent.
 
     Grid-port current (field 2) and power (field 4) in this block do not
     track the grid meter in the verified capture - only voltage and the
     shared frequency are read here.
     """
     out: dict[str, float] = {}
+    phase_a_freq: float | None = None
+    fallback_freq: float | None = None
     for block in blocks:
         if not isinstance(block, bytes):
             continue
@@ -307,15 +315,23 @@ def _grid_phases(blocks: list[Any]) -> dict[str, float]:
                 decoded = _decode_scalar(sub_wire, sub_raw, _TYPE_FLOAT)
                 if decoded is not None and isfinite(decoded):
                     values[sub_num] = decoded
-            freq = values.get(3)
-            if freq is not None:
-                out["pcs_ac_freq_hz"] = freq
             index = values.get(5)
             if index is None or int(index) not in _PHASE_LABELS:
                 continue
+            freq = values.get(3)
+            if freq is not None:
+                if int(index) == 1:
+                    if phase_a_freq is None:
+                        phase_a_freq = freq
+                elif fallback_freq is None and freq > 0:
+                    fallback_freq = freq
             voltage = values.get(1)
             if voltage is not None:
                 out[f"grid_phase_{_PHASE_LABELS[int(index)]}_voltage_v"] = voltage
+    if phase_a_freq is not None:
+        out["pcs_ac_freq_hz"] = phase_a_freq
+    elif fallback_freq is not None:
+        out["pcs_ac_freq_hz"] = fallback_freq
     return out
 
 
@@ -476,8 +492,37 @@ def _finalize(parsed: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def parse_ocean2_proto_message(payload: bytes) -> dict[str, Any] | None:
-    """Parse an Ocean 2 protobuf frame into flat sensor keys."""
+#: The readings whose sign depends on the unit: total AC power (4.1) and the
+#: active power of each inverter phase (4.3.1[n].3). Everything else the
+#: parser publishes has the same sign on every unit seen so far.
+_AC_SIGN_KEYS = (
+    "pcs_ac_power_w",
+    *(f"inv_phase_{label}_active_power_w" for label in _PHASE_LABELS.values()),
+)
+
+
+def _invert_ac_sign(parsed: dict[str, Any]) -> None:
+    """Flip the sign of the AC power readings in place.
+
+    `0.0 - value` rather than `-value`: a negated zero is -0.0, which Home
+    Assistant would render as "-0.0" on an idle inverter.
+    """
+    for key in _AC_SIGN_KEYS:
+        value = parsed.get(key)
+        if isinstance(value, (int, float)):
+            parsed[key] = 0.0 - value
+
+
+def parse_ocean2_proto_message(
+    payload: bytes, *, invert_ac_sign: bool = False
+) -> dict[str, Any] | None:
+    """Parse an Ocean 2 protobuf frame into flat sensor keys.
+
+    `invert_ac_sign` is for the units that report total AC power and the
+    inverter phase active power with the opposite sign (see
+    `OCEAN2_AC_SIGN_INVERTED`). It is applied after the walk and before the
+    directional split, so no other key derives from a flipped reading.
+    """
     try:
         headers, _ = decode_header_message(payload)
     except (IndexError, ValueError, struct.error):
@@ -507,4 +552,8 @@ def parse_ocean2_proto_message(payload: bytes) -> dict[str, Any] | None:
             merged.update(decoded)
             break
 
-    return _finalize(merged) if merged else None
+    if not merged:
+        return None
+    if invert_ac_sign:
+        _invert_ac_sign(merged)
+    return _finalize(merged)

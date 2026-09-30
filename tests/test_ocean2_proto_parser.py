@@ -360,6 +360,131 @@ class TestGridPhases:
         # One shared key, never split per phase.
         assert "grid_phase_a_freq_hz" not in parsed
 
+    def test_three_phase_frequency_comes_from_the_phase_a_record(self) -> None:
+        # Distinct values per phase, so that phase A and the last record
+        # differ: a real RE11 repeats one frequency, but the rule is pinned.
+        container = _msg(
+            4,
+            _phase_record(1, field_index=5, voltage=231.0, freq_hz=50.0)
+            + _phase_record(2, field_index=5, voltage=230.5, freq_hz=50.1)
+            + _phase_record(3, field_index=5, voltage=229.9, freq_hz=49.9),
+        )
+        parsed = parse_ocean2_proto_message(_telemetry(inverter=container))
+        assert parsed is not None
+        assert parsed["pcs_ac_freq_hz"] == pytest.approx(50.0)
+
+    def test_single_phase_frequency_survives_the_zero_records_around_it(self) -> None:
+        # Single-phase RE41 order: an unindexed record with 0.0 first, phase A
+        # with the real frequency, then B and C at 0.0. The last record used
+        # to win, which published 0.0 Hz for the whole device.
+        container = _msg(
+            4,
+            _msg(1, _f32(3, 0.0))
+            + _phase_record(1, field_index=5, voltage=231.0, freq_hz=49.94)
+            + _phase_record(2, field_index=5, freq_hz=0.0)
+            + _phase_record(3, field_index=5, freq_hz=0.0),
+        )
+        parsed = parse_ocean2_proto_message(_telemetry(inverter=container))
+        assert parsed is not None
+        assert parsed["pcs_ac_freq_hz"] == pytest.approx(49.94)
+        assert parsed["grid_phase_a_voltage_v"] == pytest.approx(231.0)
+
+    def test_frequency_falls_back_when_phase_a_carries_no_frequency_field(
+        self,
+    ) -> None:
+        # Phase A sends no field 3 at all: the first other indexed record
+        # with a frequency above zero stands in for it.
+        container = _msg(
+            4,
+            _phase_record(1, field_index=5, voltage=231.0)
+            + _phase_record(2, field_index=5, freq_hz=50.1)
+            + _phase_record(3, field_index=5, freq_hz=49.9),
+        )
+        parsed = parse_ocean2_proto_message(_telemetry(inverter=container))
+        assert parsed is not None
+        assert parsed["pcs_ac_freq_hz"] == pytest.approx(50.1)
+
+    def test_frequency_is_phase_a_whatever_the_record_order(self) -> None:
+        # Phase A is named by its index, not by its position in the block.
+        container = _msg(
+            4,
+            _phase_record(2, field_index=5, voltage=230.5, freq_hz=50.1)
+            + _phase_record(3, field_index=5, voltage=229.9, freq_hz=49.9)
+            + _phase_record(1, field_index=5, voltage=231.0, freq_hz=49.94),
+        )
+        parsed = parse_ocean2_proto_message(_telemetry(inverter=container))
+        assert parsed is not None
+        assert parsed["pcs_ac_freq_hz"] == pytest.approx(49.94)
+
+    def test_a_zero_sent_by_phase_a_is_published_not_replaced_by_another_phase(
+        self,
+    ) -> None:
+        # Phase A does send a frequency, and it is 0.0. That is the reading,
+        # even with a live-looking value on phase B.
+        container = _msg(
+            4,
+            _phase_record(1, field_index=5, voltage=0.0, freq_hz=0.0)
+            + _phase_record(2, field_index=5, freq_hz=50.1),
+        )
+        parsed = parse_ocean2_proto_message(_telemetry(inverter=container))
+        assert parsed is not None
+        assert parsed["pcs_ac_freq_hz"] == 0.0
+
+    def test_an_unindexed_record_does_not_supply_the_frequency(self) -> None:
+        # Only records that name a phase count; a stray unindexed reading
+        # ahead of phase A must not stand in for the frequency.
+        container = _msg(
+            4,
+            _msg(1, _f32(3, 60.0))
+            + _phase_record(1, field_index=5, voltage=231.0, freq_hz=49.94),
+        )
+        parsed = parse_ocean2_proto_message(_telemetry(inverter=container))
+        assert parsed is not None
+        assert parsed["pcs_ac_freq_hz"] == pytest.approx(49.94)
+
+    def test_all_zero_indexed_records_publish_zero_hertz(self) -> None:
+        # A grid outage: every indexed record reports 0 V and 0 Hz. Zero is
+        # the reading, published next to the voltage of the same record.
+        container = _msg(
+            4,
+            _msg(1, _f32(3, 0.0))
+            + _phase_record(1, field_index=5, voltage=0.0, freq_hz=0.0)
+            + _phase_record(2, field_index=5, freq_hz=0.0)
+            + _phase_record(3, field_index=5, freq_hz=0.0),
+        )
+        parsed = parse_ocean2_proto_message(_telemetry(inverter=container))
+        assert parsed is not None
+        assert parsed["pcs_ac_freq_hz"] == 0.0
+        assert parsed["grid_phase_a_voltage_v"] == 0.0
+
+    def test_a_grid_outage_frame_replaces_the_last_frequency_after_the_merge(
+        self,
+    ) -> None:
+        # The coordinator merges every frame with `dict.update`, so a key the
+        # parser leaves out keeps its old value. After a 50 Hz frame, an
+        # all-zero indexed frame must therefore carry the 0.0 itself.
+        live = _msg(
+            4,
+            _msg(1, _f32(3, 0.0))
+            + _phase_record(1, field_index=5, voltage=231.0, freq_hz=49.94)
+            + _phase_record(2, field_index=5, freq_hz=0.0)
+            + _phase_record(3, field_index=5, freq_hz=0.0),
+        )
+        outage = _msg(
+            4,
+            _msg(1, _f32(3, 0.0))
+            + _phase_record(1, field_index=5, voltage=0.0, freq_hz=0.0)
+            + _phase_record(2, field_index=5, freq_hz=0.0)
+            + _phase_record(3, field_index=5, freq_hz=0.0),
+        )
+        state: dict[str, float] = {}
+        for container in (live, outage):
+            parsed = parse_ocean2_proto_message(_telemetry(inverter=container))
+            assert parsed is not None
+            state.update(parsed)
+        assert state["pcs_ac_freq_hz"] == 0.0
+        assert state["grid_phase_a_voltage_v"] == 0.0
+
     def test_drops_a_non_finite_grid_phase_voltage(self) -> None:
         record = _f32(1, float("nan")) + _f32(3, 50.0) + _f32(5, 1.0)
         container = _msg(4, _msg(1, record))
