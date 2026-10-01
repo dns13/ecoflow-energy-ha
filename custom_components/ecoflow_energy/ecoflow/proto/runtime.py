@@ -233,6 +233,20 @@ def _build_powerocean_table(pb2: Any) -> dict[tuple[int, int], CmdConfig]:
             flags={"_is_timer_task_list": True},
             decode_empty_payload=True,
         ),
+        # The feed-to-grid schedule, the device's own second task list. Same
+        # get-all-reply shape as (96, 10) above, own header and own field
+        # layout - see the comment above `EmsAllTouTaskReport` in the proto.
+        # Evidence is the reporter capture on #381: nine list pushes, every
+        # one carrying the two pre-existing slots. No empty list is on record
+        # for this family; `decode_empty_payload` is inherited from the timer
+        # family, where the #328 frames show an empty list is how the last
+        # task's deletion arrives.
+        (96, 14): CmdConfig(
+            msg_class=pb2.EmsAllTouTaskReport,
+            parse_path="typed_runtime:tou_task_list",
+            flags={"_is_tou_task_list": True},
+            decode_empty_payload=True,
+        ),
     }
 
 
@@ -321,6 +335,7 @@ def _empty_mapped() -> dict[str, Any]:
         "_is_delta3_cms_heartbeat": False,
         "_is_delta3_bms_heartbeat": False,
         "_is_timer_task_list": False,
+        "_is_tou_task_list": False,
     }
 
 
