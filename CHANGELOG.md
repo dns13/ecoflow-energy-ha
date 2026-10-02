@@ -20,6 +20,8 @@ All notable changes to this project will be documented in this file.
 
 - The Local mode now has a Battery Connection diagnostic binary sensor, which shows whether the inverter reports its battery as connected, and a System Alerts diagnostic sensor that lists the alerts the inverter reports, for example fan failure or battery overheating, so an automation can send a notification. System Alerts shows `none` while no alert is active.
 
+- A device that an entry no longer uses can now be removed from that entry on its device page. Such a device is left behind when you deselect it in the integration's options, for example after moving a PowerOcean from an account entry to a Local entry, and until now it had no delete button. If another entry still uses the device, only the old entry's link and its leftover entities are removed. A device an entry still has selected cannot be removed from it.
+
 - The STREAM AC 5000 has an AC Output Power sensor for the load on its AC socket. It appears once the socket has delivered power for the first time, so a unit whose socket is never used does not get it. Mapped from @napalmz's app screenshots and diagnostics download on #458.
 
 ### Fixed
