@@ -22,6 +22,8 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
+- A diagnostics download now hides the installation address that a Smart Home Panel 2 reports together with its coordinates. Before, the town and the coordinates stayed readable in the download. A diagnostics download also no longer alters recorded frames whose padding happens to read as digits.
+
 - Grid Import Power on the STREAM AC 5000 left out the power drawn from the grid for the AC socket, so with a load on the socket it read only the house share (200 W where the app showed 549 W in @napalmz's report on #458). The socket load is now included, and the Grid Import Energy counter grows by it from now on, so the energy dashboard shows more grid import than before on a unit that uses its socket. Past values are not changed. Which reading carries the socket load while it runs from the battery or from solar is not confirmed yet.
 
 ## [1.24.0] - 2026-10-02
