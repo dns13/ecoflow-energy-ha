@@ -32,7 +32,23 @@ _MASK_BYTE = b"X"
 # which is the device serial and the account id - a frame also carries the
 # serial of every battery pack and of any attached accessory, and those are
 # nobody's to publish either. This catches them by shape.
-_SERIAL_RUN = re.compile(rb"[A-Z0-9]{15,}")
+_SERIAL_MIN_LEN = 15
+_SERIAL_RUN = re.compile(rb"[A-Z0-9]{%d,}" % _SERIAL_MIN_LEN)
+
+# The shape of a masked serial that a wire run spilled over: the mask byte at
+# least `_SERIAL_MIN_LEN` times, with at most one other byte on each side (the
+# length byte before it and the next field's tag after it). Matched against a
+# whole span, never searched inside one: a plain serial that sits beside such a
+# run must not borrow the run's evidence.
+_MASKED_SERIAL_SPAN = re.compile(
+    rb"[^%b]?%b{%d,}[^%b]?"
+    % (
+        re.escape(_MASK_BYTE),
+        re.escape(_MASK_BYTE),
+        _SERIAL_MIN_LEN,
+        re.escape(_MASK_BYTE),
+    )
+)
 
 # Identifiers shorter than a serial cannot be caught by shape alone. A run of
 # 12 upper-case alphanumerics appears in ordinary binary often enough that a
@@ -603,6 +619,20 @@ def sanitize_frame(payload: bytes, secrets: list[str]) -> bytes:
             # here and one there; restoring those would hand back one letter
             # of it per frame. Any span whose plaintext is not all mask bytes
             # keeps the rewrite, as before.
+            #
+            # A span also goes back when its plaintext is a masked serial and
+            # nothing more: the mask byte at least `_SERIAL_MIN_LEN` times with
+            # at most one other byte on each side (`_MASKED_SERIAL_SPAN`). The
+            # wire run can reach past the mask into the length byte or the
+            # next field's tag, which under the key is alphanumeric too
+            # (`" " ^ 0x61` is `A`, measured on the DELTA Pro Ultra fixture,
+            # #464), and that one byte must not decide for the sixteen beside
+            # it. The match is anchored on the whole span. A header that only
+            # declares a key can send plain bytes, and there `inner` is not
+            # plaintext: `cleaned == inner` says nothing about the wire, and a
+            # plain serial lying beside a run of `X ^ key` bytes is a span
+            # with a long foreign stretch around its mask bytes. A search for
+            # the run anywhere inside the span would hand that serial back.
             restored = bytearray(on_the_wire)
             offset = 0
             length = len(ciphertext)
@@ -613,7 +643,11 @@ def sanitize_frame(payload: bytes, secrets: list[str]) -> bytes:
                 span_start = offset
                 while offset < length and ciphertext[offset] != on_the_wire[offset]:
                     offset += 1
-                if all(byte == _MASK_BYTE[0] for byte in inner[span_start:offset]):
+                span_plain = inner[span_start:offset]
+                if (
+                    all(byte == _MASK_BYTE[0] for byte in span_plain)
+                    or _MASKED_SERIAL_SPAN.fullmatch(span_plain) is not None
+                ):
                     restored[span_start:offset] = ciphertext[span_start:offset]
             sanitized = (
                 sanitized[: region.start] + bytes(restored) + sanitized[region.end :]

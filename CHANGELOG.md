@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- The DELTA Pro Ultra (`Y711`) is supported, read-only and in Enhanced Mode only: battery level, remaining time, input and output power per port, battery voltage and power, two temperatures, the backup reserve, and level and temperature for each battery pack. Mapped from @jrbeir's two diagnostics downloads. The unit was idle while they were recorded, so the power readings still need a check under load.
+
 - The Local (Modbus/TCP) mode of a three-phase PowerOcean now has an Off-Grid binary sensor. It shows whether the inverter runs off-grid, reads the status straight from the inverter and works without the EcoFlow cloud, so it can trigger an automation during a power outage.
 
 - The Local mode now has a System Abnormal diagnostic binary sensor, which turns on while the inverter reports its system status as abnormal.

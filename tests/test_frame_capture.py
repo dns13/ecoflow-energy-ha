@@ -1414,6 +1414,35 @@ class TestMaskingDoesNotCorruptRealFrames:
         # The control only means something if the shape is present.
         assert wire_runs_seen >= 2, wire_runs_seen
 
+    def test_a_wire_run_reaching_past_a_masked_serial_is_restored(self) -> None:
+        """A masked serial whose wire run spills into the next field survives.
+
+        On the DELTA Pro Ultra fixture (#464) the battery heartbeat carries the
+        masked serial under key 0x61, which spells `9` sixteen times, and the
+        field tag after it (`0x20`) spells `A`, so the plain passes rewrote a
+        seventeen-byte run whose plaintext was not all mask bytes. The second
+        pass turned the masked serial into nines and broke the field tag.
+        Every frame of that fixture is the control.
+        """
+        import json
+        from pathlib import Path
+
+        fixture = (
+            Path(__file__).parent
+            / "fixtures"
+            / "delta_pro_ultra"
+            / "y711_frames_issue464.json"
+        )
+        frames = json.loads(fixture.read_text())["frames"]
+        spill_seen = 0
+        for frame in frames:
+            raw = bytes.fromhex(frame["hex"])
+            if b"9" * 16 + b"A" in raw:
+                spill_seen += 1
+            assert sanitize_frame(raw, []) == raw
+        # The control only means something if the shape is present.
+        assert spill_seen >= 1, spill_seen
+
     def test_a_wire_run_over_unmasked_plaintext_is_still_rewritten(self) -> None:
         """Negative control for the restore above: it is limited to bytes whose
         plaintext already carries the mask byte. Plaintext `y` under key 0x3e
@@ -1452,6 +1481,31 @@ class TestMaskingDoesNotCorruptRealFrames:
         assert b"X" * 16 in sanitized
         assert serial not in sanitized
         assert b"F" not in sanitized[frame.index(serial) : frame.index(serial) + 16]
+
+    def test_a_plain_serial_beside_a_run_of_mask_bytes_stays_masked(self) -> None:
+        """Third negative control for the restore: the run is not the span.
+
+        A header that declares key 0x61 but sends plain bytes carries a serial
+        followed by sixteen `9`, which is `X ^ 0x61`. The wire is one
+        thirty-two byte run and the plain pass masks all of it. Under the key
+        the span reads as sixteen foreign bytes and then sixteen mask bytes, so
+        the restore must not treat it as a masked serial that merely spilled
+        a byte: a search for fifteen mask bytes anywhere in the span did, and
+        handed the whole plaintext serial back (review finding of 2026-10-02).
+        The #464 fixture next to it is the positive control: one foreign byte
+        on each side still restores.
+        """
+        key = 0x61
+        serial = b"C376TESTPLAINABC"  # no `9`, so no byte of it equals X ^ key
+        header = bytearray()
+        header.extend(encode_field_varint(6, 1))  # enc_type = XOR, declared
+        header.extend(encode_field_varint(14, key))  # seq
+        header.extend(encode_field_bytes(1, serial + b"9" * 16))  # pdata plain
+        frame = encode_field_bytes(1, bytes(header))
+        sanitized = sanitize_frame(frame, [])
+        assert serial not in sanitized
+        assert serial[:15] not in sanitized
+        assert b"X" * 32 in sanitized
 
     def test_no_identifier_survives_under_the_mask(self) -> None:
         """The guard for PLAN-128: an encrypted region must be clean too.
