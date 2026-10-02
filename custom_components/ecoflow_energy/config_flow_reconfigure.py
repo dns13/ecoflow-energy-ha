@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Any
 
 import aiohttp
 import voluptuous as vol
-from homeassistant.config_entries import ConfigEntry, ConfigFlowResult
+from homeassistant.config_entries import ConfigEntry, ConfigEntryState, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PORT
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
@@ -109,6 +109,34 @@ class ReconfigureFlowMixin(_Base):
             return await self.async_step_reconfigure_app()
         return await self.async_step_reconfigure_confirm()
 
+    async def _release_local_connection(
+        self, entry: ConfigEntry, host: str, port: int
+    ) -> bool:
+        """Unload a running Local entry for a probe on a new address.
+
+        The inverter serves one Modbus client, and a loaded Local entry is
+        that client: a probe on a new host string (an address replaced by a
+        name, say) would be a second one and go unanswered. An entry waiting
+        to retry its setup is released too, so a retry cannot claim the
+        client mid-probe. An unchanged host and port share the entry's own
+        connection and need no release. Returns whether the entry was
+        unloaded; the caller starts it again on every path that does not
+        reload it.
+        """
+        if (
+            entry.data.get(CONF_MODE) != MODE_LOCAL
+            or entry.state
+            not in (ConfigEntryState.LOADED, ConfigEntryState.SETUP_RETRY)
+            or not valid_local_host(host)
+            or (host, port)
+            == (
+                entry.data.get(CONF_HOST),
+                entry.data.get(CONF_PORT, MODBUS_DEFAULT_PORT),
+            )
+        ):
+            return False
+        return await self.hass.config_entries.async_unload(entry.entry_id)
+
     async def async_step_reconfigure_local(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
@@ -126,17 +154,29 @@ class ReconfigureFlowMixin(_Base):
         host = reconfigure_entry.data.get(CONF_HOST, "")
         port = reconfigure_entry.data.get(CONF_PORT, MODBUS_DEFAULT_PORT)
         unit_id = reconfigure_entry.data.get(CONF_UNIT_ID, 1)
+        released = False
 
         if user_input is not None:
             host = user_input[CONF_HOST].strip()
             port = user_input[CONF_PORT]
             unit_id = user_input[CONF_UNIT_ID]
+            released = await self._release_local_connection(
+                reconfigure_entry, host, port
+            )
             try:
                 if not valid_local_host(host):
                     raise LocalDeviceError("invalid_host")
                 info = await read_local_device(self.hass, host, port, unit_id)
             except LocalDeviceError as err:
                 errors["base"] = err.reason
+            except BaseException:
+                # A step cancelled or failing mid-probe must not leave the
+                # entry unloaded. Scheduling survives a cancellation.
+                if released:
+                    self.hass.config_entries.async_schedule_reload(
+                        reconfigure_entry.entry_id
+                    )
+                raise
             else:
                 serial = info["serial"]
                 if serial != device["sn"]:
@@ -144,6 +184,10 @@ class ReconfigureFlowMixin(_Base):
                 elif serial_in_other_entries(
                     self.hass, serial, reconfigure_entry.entry_id
                 ):
+                    if released:
+                        self.hass.config_entries.async_schedule_reload(
+                            reconfigure_entry.entry_id
+                        )
                     return self.async_abort(reason="already_configured")
                 else:
                     switching = reconfigure_entry.data.get(CONF_MODE) != MODE_LOCAL
@@ -163,6 +207,8 @@ class ReconfigureFlowMixin(_Base):
                         reason="mode_switched" if switching else "local_updated",
                     )
 
+        if released:
+            self.hass.config_entries.async_schedule_reload(reconfigure_entry.entry_id)
         return self.async_show_form(
             step_id="reconfigure_local",
             data_schema=local_schema(host, port, unit_id),
