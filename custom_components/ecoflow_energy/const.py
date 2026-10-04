@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Literal, Protocol
@@ -5498,7 +5498,9 @@ DELTA3_PORT_PRIORITY_KEYS: frozenset[str] = frozenset(
 )
 
 # Serial prefix -> entity keys that variant never produces. A prefix absent
-# from this table gets the full entity list of its device type.
+# from this table gets the full entity list of its device type. The `R655`
+# entry is added further down, next to the Delta 3 definition lists it is
+# computed from.
 _SN_PREFIX_EXCLUDED_KEYS: dict[str, frozenset[str]] = {
     "BK01": STREAM_MICRO_EXCLUDED_KEYS,
     "P321": DELTA3_PORT_PRIORITY_KEYS,
@@ -6434,6 +6436,88 @@ DELTA3_SELECTS: list[EcoFlowSelectDef] = [
 # cannot show what the device is set to fails the read-back gate, so the mode
 # is written and never displayed.
 AC_CHARGE_POWER_STATE_KEY = "ac_charge_power_limit_w"
+
+# RIVER 3 (`R655`) reads and never writes (#296). The three recorded units
+# prove telemetry only: no frame in the recording is a write or the answer to
+# one, so no Delta 3 SET parameter is verified on this model, and a control
+# without a verified write and read-back would be a button that lies.
+#
+# This set names the sensors the recording backs, and it is the only thing
+# that does. Everything else the Delta 3 definitions offer, every switch,
+# number, select and binary sensor and every other sensor, is derived below as
+# the exclusion for the prefix instead of being listed a second time, so a
+# control added to the Delta 3 lists later stays off a RIVER 3 until someone
+# decides here. Two of them, the remaining times, never carry a value in the
+# recording because every unit reported itself idle; they are allowed on the
+# strength of the raw remaining-time fields that are in the frames. The
+# sensors left out are the ones the recording does not back: the solar input,
+# the 12 V output and the USB ports read 0 W (one USB reading is -2 W), and on
+# one unit the app showed 2 W of DC output while the matching Delta 3 field read
+# 0 W, so this model reports those ports somewhere the Delta 3 message does not
+# cover, and no unit had a USB load. Per-outlet AC power and the two
+# lifetime energy counters do not appear at all and would sit unknown. The
+# charge limits, the AC charge power limit and the idle timers do appear, but
+# they are the read-back of the controls left out here.
+#
+# `ac_in_energy_kwh` and `out_energy_kwh` are not in the frames either: the
+# coordinator integrates them from `ac_in_w` and `pow_out_sum_w`, which are.
+RIVER3_SENSOR_KEYS: frozenset[str] = frozenset(
+    {
+        "cms_batt_soc",
+        "pow_in_sum_w",
+        "pow_out_sum_w",
+        "ac_in_w",
+        "ac_in_energy_kwh",
+        "out_energy_kwh",
+        "chg_remain_time_min",
+        "dsg_remain_time_min",
+        "chg_dsg_state",
+        "bms_soh_pct",
+        "bms_cycles",
+        "bms_voltage_v",
+        "bms_current_a",
+        "bms_temp_c",
+        "bms_max_cell_temp_c",
+        "bms_min_cell_temp_c",
+        "bms_max_mos_temp_c",
+        "bms_min_mos_temp_c",
+        "bms_max_cell_vol_mv",
+        "bms_min_cell_vol_mv",
+        "bms_cell_vol_diff_mv",
+        "bms_remain_cap_mah",
+        "bms_full_cap_mah",
+        "bms_design_cap_mah",
+        "bms_cell_count",
+        "bms_real_soh_pct",
+        "bms_calendar_soh_pct",
+        "bms_cycle_soh_pct",
+        "bms_error_code",
+    }
+)
+
+
+def _delta3_names_outside(allowed: frozenset[str]) -> frozenset[str]:
+    """Return every Delta 3 entity key and state key not named in ``allowed``."""
+    definition_lists: tuple[Sequence[_HasKey], ...] = (
+        DELTA3_SENSORS,
+        DELTA3_BINARY_SENSORS,
+        DELTA3_SWITCHES,
+        DELTA3_NUMBERS,
+        DELTA3_SELECTS,
+    )
+    names: set[str] = set()
+    for definitions in definition_lists:
+        for definition in definitions:
+            names.add(definition.key)
+            state_key = getattr(definition, "state_key", None)
+            if state_key is not None:
+                names.add(state_key)
+    return frozenset(names - allowed)
+
+
+# The one table entry that cannot sit in the literal above, because it is
+# computed from the Delta 3 definition lists that come after it in the file.
+_SN_PREFIX_EXCLUDED_KEYS["R655"] = _delta3_names_outside(RIVER3_SENSOR_KEYS)
 
 
 # =====================================================================
