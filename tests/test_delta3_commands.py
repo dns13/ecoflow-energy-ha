@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import pytest
 
+from custom_components.ecoflow_energy.const import DELTA3_NUMBERS
 from custom_components.ecoflow_energy.ecoflow.delta3_commands import (
     AC_CHARGE_MODE_FIELD,
     DELTA3_NUMBER_PARAMS,
     DELTA3_SWITCH_PARAMS,
+    backup_reserve_soc_bounds,
     build_number_command,
     build_proto_command,
     build_switch_command,
@@ -154,7 +156,7 @@ class TestNumberCommands:
     @pytest.mark.parametrize(
         ("key", "params_key", "low", "high"),
         [
-            ("backup_reserve_soc", "cfgBackupReverseSoc", 0, 50),
+            ("backup_reserve_soc", "cfgBackupReverseSoc", 5, 100),
             ("max_charge_soc", "cfgMaxChgSoc", 50, 100),
             ("min_discharge_soc", "cfgMinDsgSoc", 0, 30),
         ],
@@ -175,11 +177,11 @@ class TestNumberCommands:
         assert at_low["params"][params_key] == low
         assert at_high["params"][params_key] == high
 
-    def test_backup_reserve_tops_out_at_fifty_not_hundred(self) -> None:
-        """Easy to get wrong: this is a ratio, not a SoC target."""
-        cmd = build_number_command("backup_reserve_soc", 100)
+    def test_backup_reserve_above_fifty_is_sent_as_is(self) -> None:
+        """The reserve used to stop at 50; the battery limits bound it now."""
+        cmd = build_number_command("backup_reserve_soc", 80)
         assert cmd is not None
-        assert cmd["params"]["cfgBackupReverseSoc"] == 50
+        assert cmd["params"]["cfgBackupReverseSoc"] == 80
 
     def test_float_input_is_rounded_to_int(self) -> None:
         cmd = build_number_command("max_charge_soc", 79.6)
@@ -190,6 +192,43 @@ class TestNumberCommands:
 
     def test_unknown_key_returns_none(self) -> None:
         assert build_number_command("no_such_number", 50) is None
+
+
+class TestBackupReserveBounds:
+    """The reserve runs from five above the discharge limit to the charge limit."""
+
+    def test_bounds_follow_the_two_battery_limits(self) -> None:
+        """Measured on a P231: with the discharge limit at 10 the device stored
+        a write of 12 as 15, and kept a reserve equal to the charge limit."""
+        assert backup_reserve_soc_bounds(90, 10) == (15, 90)
+        assert backup_reserve_soc_bounds(80, 20) == (25, 80)
+
+    def test_missing_limits_give_the_declared_range(self) -> None:
+        assert backup_reserve_soc_bounds(None, None) == (5, 100)
+        assert backup_reserve_soc_bounds(90, None) == (5, 90)
+        assert backup_reserve_soc_bounds(None, 10) == (15, 100)
+
+    def test_out_of_range_limits_stay_inside_the_declared_range(self) -> None:
+        assert backup_reserve_soc_bounds(120, -5) == (5, 100)
+
+    @pytest.mark.parametrize(
+        ("max_charge", "min_discharge"),
+        [(40, 45), (40, 38), (3, None)],
+    )
+    def test_crossed_limits_fall_back_to_the_declared_range(
+        self, max_charge: int, min_discharge: int | None
+    ) -> None:
+        """An inverted range makes Home Assistant refuse every value."""
+        assert backup_reserve_soc_bounds(max_charge, min_discharge) == (5, 100)
+
+    def test_the_entity_declares_the_range_the_builder_clamps_to(self) -> None:
+        """One range in two places: nothing else ties them together."""
+        definition = next(d for d in DELTA3_NUMBERS if d.key == "backup_reserve_soc")
+        entry = DELTA3_NUMBER_PARAMS["backup_reserve_soc"]
+        assert (definition.min_value, definition.max_value) == (
+            entry.minimum,
+            entry.maximum,
+        )
 
 
 class TestProtoCommands:
@@ -258,11 +297,11 @@ class TestProtoCommands:
         frame = build_proto_command(cmd, self.SN)
         assert frame is not None
         assert self._pdata(frame) == "880264"  # clamped to 100
-        cmd = build_number_command("backup_reserve_soc", 99)
+        cmd = build_number_command("backup_reserve_soc", 120)
         assert cmd is not None
         frame = build_proto_command(cmd, self.SN)
         assert frame is not None
-        assert self._pdata(frame) == "b00632"  # clamped to 50
+        assert self._pdata(frame) == "b00664"  # clamped to 100
 
     def test_frame_carries_the_hardware_verified_header(self) -> None:
         cmd = build_switch_command("beeper_switch", True)

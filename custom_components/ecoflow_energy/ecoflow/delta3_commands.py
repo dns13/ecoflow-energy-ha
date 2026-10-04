@@ -103,9 +103,14 @@ AC_CHARGE_MODE_FIELD = 125
 AC_CHARGE_MODE_CUSTOM = 0
 
 
-# Number controls: entity key -> wire mapping. Bounds are vendor-documented.
+# Number controls: entity key -> wire mapping. Bounds are vendor-documented,
+# except the backup reserve floor, which is measured (see
+# `backup_reserve_soc_bounds`).
 DELTA3_NUMBER_PARAMS: dict[str, Delta3Number] = {
-    "backup_reserve_soc": Delta3Number("cfgBackupReverseSoc", 0, 50, 102),
+    # The widest range the battery limits can produce: the floor is the lowest
+    # discharge limit plus the device's margin. The entity narrows it at
+    # runtime to sit between the limits, see `backup_reserve_soc_bounds`.
+    "backup_reserve_soc": Delta3Number("cfgBackupReverseSoc", 5, 100, 102),
     "max_charge_soc": Delta3Number("cfgMaxChgSoc", 50, 100, 33),
     "min_discharge_soc": Delta3Number("cfgMinDsgSoc", 0, 30, 34),
     # AC charge power. The bounds are the app slider's own, read off a D3M1
@@ -202,6 +207,53 @@ def port_priority_soc_bounds(
     upper_source = max_charge_soc if isinstance(max_charge_soc, int) else 100
     lower = min(lower_source, PORT_PRIORITY_LOWER_ANCHOR) + PORT_PRIORITY_SOC_MARGIN
     upper = max(upper_source, PORT_PRIORITY_UPPER_ANCHOR) - PORT_PRIORITY_SOC_MARGIN
+    return lower, upper
+
+
+# --- Backup reserve: between the two battery limits --------------------------
+#
+# A reserve below the discharge limit is never reached, and one above the charge
+# limit can never be filled, so the useful range is the span between them.
+#
+# The device keeps the reserve at least five points above the discharge limit.
+# Measured on a DELTA 3 (P231) in PR #483: with the discharge limit at 10, a
+# write of 12 was stored as 15 without an error, and raising the discharge
+# limit to 20 carried a reserve of 15 up to 25. A reserve equal to the charge
+# limit (90) was kept. Home Assistant then kept showing the value it sent; why
+# the correction did not reach it is not established (PR #483). A value below
+# the floor is therefore never sent.
+#
+# Only P231 is measured. The same five points separate the port priority
+# cutoffs from the discharge limit in the app on a D3M1, see above. Two D3M1
+# captures (2026-08-04) report a reserve of 0 at a discharge limit of 0 with
+# energy backup off, so the floor is not shown to hold on every model.
+BACKUP_RESERVE_SOC_KEY = "backup_reserve_soc"
+BACKUP_RESERVE_SOC_MARGIN = 5
+
+
+def backup_reserve_soc_bounds(
+    max_charge_soc: int | None, min_discharge_soc: int | None
+) -> tuple[int, int]:
+    """Return the (lower, upper) backup reserve bounds for the battery limits.
+
+    The lower end is the discharge limit plus the device's margin, the upper
+    end the charge limit. A limit that has not been reported yet leaves its
+    end at the declared range.
+
+    The inputs are whatever the device reports, so nothing keeps them from
+    crossing. Limits that would invert the range give the full declared range
+    instead, the same as no report: an inverted range makes Home Assistant
+    refuse every value.
+    """
+    entry = DELTA3_NUMBER_PARAMS[BACKUP_RESERVE_SOC_KEY]
+    lower = entry.minimum
+    upper = entry.maximum
+    if isinstance(min_discharge_soc, int):
+        lower = max(lower, min_discharge_soc + BACKUP_RESERVE_SOC_MARGIN)
+    if isinstance(max_charge_soc, int):
+        upper = min(upper, max_charge_soc)
+    if lower > upper:
+        return entry.minimum, entry.maximum
     return lower, upper
 
 
