@@ -2872,6 +2872,9 @@
       },
       "modbus_control": {
         "name": "Modbus-Steuerung"
+      },
+      "ev_continuous_charging": {
+        "name": "Wallbox-Dauerladen"
       }
     },
     "number": {
@@ -3016,6 +3019,12 @@
       "ev_charge_current_a": {
         "name": "Wallbox-Ladestrom"
       },
+      "ev_solar_min_current_a": {
+        "name": "Wallbox-Mindestladestrom Solar"
+      },
+      "ev_custom_current_a": {
+        "name": "Wallbox-Ladestrom Benutzerdefiniert"
+      },
       "local_backup_reserve": {
         "name": "Backup-Reserve"
       },
@@ -3151,6 +3160,14 @@
           "custom": "Benutzerdefiniert",
           "smart": "Smart Modus"
         }
+      },
+      "ev_phase_setting": {
+        "name": "Wallbox-Phaseneinstellung",
+        "state": {
+          "auto": "Automatisch",
+          "one_phase": "Eine Phase",
+          "three_phases": "Drei Phasen"
+        }
       }
     },
     "button": {
@@ -3214,6 +3231,30 @@
     "powerpulse_charge_mode_unknown": {
       "message": "{option} ist kein Lademodus, den diese Wallbox meldet."
     },
+    "powerpulse_continuous_needs_powerocean": {
+      "message": "Dauerladen lässt sich nur über eine PowerOcean im selben Konto schalten; dieser Eintrag hat keine."
+    },
+    "powerpulse_continuous_not_confirmed": {
+      "message": "Die Wallbox hat den neuen Zustand von Dauerladen nicht innerhalb der erlaubten Zeit gemeldet. Zuletzt gemeldet: {reported}."
+    },
+    "powerpulse_continuous_report_missing": {
+      "message": "Die Wallbox hat ihre aktuellen Einstellungen noch nicht gemeldet. Warte auf ihren nächsten Einstellungsbericht."
+    },
+    "powerpulse_continuous_report_stale": {
+      "message": "Der letzte Einstellungsbericht der Wallbox ist zu alt, um diese Änderung darauf aufzubauen. Warte auf ihren nächsten Einstellungsbericht."
+    },
+    "powerpulse_continuous_report_unusable": {
+      "message": "Die Wallbox meldet für {field} den Wert {value}. Darauf kann diese Integration keine Änderung aufbauen. Ändere Dauerladen in der EcoFlow-App."
+    },
+    "powerpulse_custom_current_needs_powerocean": {
+      "message": "Wallbox-Ladestrom Benutzerdefiniert lässt sich nur über eine PowerOcean im selben Konto setzen; dieser Eintrag hat keine."
+    },
+    "powerpulse_custom_current_not_confirmed": {
+      "message": "Die Wallbox hat den neuen Wert für Wallbox-Ladestrom Benutzerdefiniert nicht innerhalb der erlaubten Zeit gemeldet. Zuletzt gemeldet: {reported}."
+    },
+    "powerpulse_custom_current_range": {
+      "message": "Für Wallbox-Ladestrom Benutzerdefiniert nimmt die Wallbox einen Wert zwischen {min} und {max} A an."
+    },
     "powerpulse_descriptor_missing": {
       "message": "Die Wallbox hat ihre Adresse noch nicht gemeldet. Warte auf ihren nächsten Einstellungsbericht."
     },
@@ -3229,11 +3270,29 @@
     "powerpulse_own_channel_offline": {
       "message": "Die eigene Verbindung der Wallbox steht nicht, der Befehl kann nicht gesendet werden."
     },
+    "powerpulse_phase_setting_needs_powerocean": {
+      "message": "Die Phaseneinstellung lässt sich nur über eine PowerOcean im selben Konto setzen; dieser Eintrag hat keine."
+    },
+    "powerpulse_phase_setting_not_confirmed": {
+      "message": "Die Wallbox hat die neue Phaseneinstellung nicht innerhalb der erlaubten Zeit gemeldet. Zuletzt gemeldet: {reported}."
+    },
+    "powerpulse_phase_setting_unknown": {
+      "message": "{option} ist keine Phaseneinstellung, die diese Wallbox annimmt."
+    },
     "powerpulse_sibling_missing": {
       "message": "Dieser Eintrag enthält mehr als ein PowerOcean, und der Wallbox-Befehl kann nicht erkennen, über welches die Wallbox läuft."
     },
     "powerpulse_sibling_offline": {
       "message": "Das PowerOcean, über das der Wallbox-Befehl läuft, ist nicht verbunden."
+    },
+    "powerpulse_solar_min_current_needs_powerocean": {
+      "message": "Wallbox-Mindestladestrom Solar lässt sich nur über eine PowerOcean im selben Konto setzen; dieser Eintrag hat keine."
+    },
+    "powerpulse_solar_min_current_not_confirmed": {
+      "message": "Die Wallbox hat den neuen Wert für Wallbox-Mindestladestrom Solar nicht innerhalb der erlaubten Zeit gemeldet. Zuletzt gemeldet: {reported}."
+    },
+    "powerpulse_solar_min_current_range": {
+      "message": "Für Wallbox-Mindestladestrom Solar nimmt die Wallbox einen Wert zwischen {min} und {max} A an."
     }
   }
 }
