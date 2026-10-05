@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from homeassistant.helpers import device_registry as dr
 
@@ -59,6 +59,19 @@ def _registry_device(
 # and two reports that still hold the old value, the device has answered,
 # and a third write would just be the loop this bound exists to stop.
 _SURPLUS_SYNC_MAX_WRITES = 2
+
+
+class SurplusSyncRecord(TypedDict):
+    """The surplus auto-sync's bound for one app value (ADR-013, #436).
+
+    `writes_by_ems` counts the writes issued per EMS value seen while the
+    app value held, `stopped_for` the EMS values whose stop was reported.
+    """
+
+    app: int
+    writes_by_ems: dict[int, int]
+    stopped_for: set[int]
+
 
 if TYPE_CHECKING:
     from ._typing import CoordinatorState as _Base
@@ -620,8 +633,18 @@ class StateApplyMixin(_Base):
         ~90 by design even though dev_soc / socDev hold the user value, and
         reissuing a SET would never close that gap. The general bound
         covers it the same way it covers every other unreconciled pair -
-        two writes, then silence, until the app value, the EMS value or a
-        user setting changes.
+        two writes per EMS value, then silence at that value, until the app
+        value or a user setting changes. An EMS value not reported before
+        still gets its own two writes.
+
+        The count is kept per EMS value, not for the latest one only (#436).
+        On a PowerOcean pair both units most likely push their own EMS
+        report into the same key, so on a pair parked at app=100 the value
+        alternates between the two units' readings (90 and 0 in the log on
+        file; no log line names the unit, so the attribution is inferred).
+        Treating every change as "the device moved" re-armed the bound on
+        each flip and wrote around the clock. A value seen before is not
+        new information, so returning to it does not reopen the sync.
         """
         if self._shutdown:
             return
@@ -636,10 +659,10 @@ class StateApplyMixin(_Base):
             return
 
         record = self._surplus_sync_record
-        # A changed app value abandons whatever pair the record was
-        # tracking, even when the new report has already converged: a move
-        # in the EcoFlow app to the value the EMS already holds is new
-        # intent, not a continuation of a suppressed pair.
+        # A changed app value abandons every pair the record was tracking,
+        # even when the new report has already converged: a move in the
+        # EcoFlow app to the value the EMS already holds is new intent, not
+        # a continuation of a suppressed pair.
         if record is not None and record["app"] != app_int:
             record = None
             self._surplus_sync_record = None
@@ -650,28 +673,26 @@ class StateApplyMixin(_Base):
             # re-arm the loop at double the rate.
             return
 
-        # A divergent pair with a different EMS value than the one on
-        # record is new information - the device moved - so it is tracked
-        # fresh even though the app value did not change.
-        if record is not None and record["ems"] != ems_int:
-            record = None
-            self._surplus_sync_record = None
-
-        if record is not None and record["writes"] >= _SURPLUS_SYNC_MAX_WRITES:
-            if not record["stopped"]:
-                record["stopped"] = True
+        # Each EMS value keeps its own count. A value not reported before is
+        # new information and starts at zero; a value already on record
+        # continues where it stopped, however often the report flips away
+        # from it and back (#436, the two units of a pair).
+        writes = record["writes_by_ems"].get(ems_int, 0) if record is not None else 0
+        if record is not None and writes >= _SURPLUS_SYNC_MAX_WRITES:
+            if ems_int not in record["stopped_for"]:
+                record["stopped_for"].add(ems_int)
                 _LOGGER.info(
                     "PowerOcean surplus auto-sync (%s): EMS still reports "
-                    "%d after %d writes of %d; no further writes until the "
-                    "app value, the EMS value or a user setting changes",
+                    "%d after %d writes of %d; no further writes at this value "
+                    "until the app value or a user setting changes",
                     self.device_tag,
                     ems_int,
-                    record["writes"],
+                    writes,
                     app_int,
                 )
                 self._log_event(
                     "surplus_auto_sync_stopped",
-                    f"app={app_int} ems={ems_int} writes={record['writes']}",
+                    f"app={app_int} ems={ems_int} writes={writes}",
                 )
             return
 
@@ -715,9 +736,9 @@ class StateApplyMixin(_Base):
             return
         self._last_app_surplus_sync_ts = now
         if record is None:
-            record = {"app": app_int, "ems": ems_int, "writes": 0, "stopped": False}
+            record = SurplusSyncRecord(app=app_int, writes_by_ems={}, stopped_for=set())
             self._surplus_sync_record = record
-        record["writes"] += 1
+        record["writes_by_ems"][ems_int] = writes + 1
         _LOGGER.info(
             "PowerOcean surplus auto-sync (%s): app=%d ems=%d -> SET both=%d",
             self.device_tag,
