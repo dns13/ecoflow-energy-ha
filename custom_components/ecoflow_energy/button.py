@@ -25,6 +25,7 @@ from .const import (
     POWERPULSE2_BUTTONS,
     EcoFlowButtonDef,
     filter_defs_for_serial,
+    supports_powerpulse_controls,
 )
 from .coordinator import EcoFlowDeviceCoordinator
 from .entity import reading_reported
@@ -61,6 +62,8 @@ async def async_setup_entry(
 
     for coordinator in coordinators.values():
         if coordinator.device_type != DEVICE_TYPE_POWERPULSE2:
+            continue
+        if not supports_powerpulse_controls(coordinator.device_sn):
             continue
         if not coordinator.enhanced_mode:
             _LOGGER.debug(
