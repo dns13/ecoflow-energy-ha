@@ -29,6 +29,12 @@ ES21_PAIR = FIXTURES / "es21_pair_pv_masked.json"
 ES21_PAIR_BOTH = FIXTURES / "es21_pair_pv_both_connections_masked.json"
 SOCKET_458 = FIXTURES / "es22_socket_458_masked.json"
 PV_KEYS = ("pv_total_w", "pv1_w", "pv2_w", "pv3_w", "pv4_w")
+# Every `f50.1` entry also carries the unit's AC power, filled on its own.
+AC_KEYS = (
+    "unit_ac_grid_power_w",
+    "unit_ac_grid_input_w",
+    "unit_ac_grid_output_w",
+)
 
 
 def _own_strings(parsed: dict) -> dict:
@@ -1004,6 +1010,79 @@ class TestUltraPvPair:
         # the battery feeds 15 W of the house.
         assert frames["08:57:03"]["_unit_batt_w_by_sn"] == {es22: 0.0, ultra: -17.5}
 
+    def test_each_unit_gets_its_own_ac_power(self) -> None:
+        """The Ultra feeds 153 W of its 187 W solar out; the ES22 is at rest."""
+        entries = _ultra_pair_frames()["08:42:58"][UNIT_PV_BY_SN_KEY]
+        ac_keys = (
+            "unit_ac_grid_power_w",
+            "unit_ac_grid_output_w",
+            "unit_ac_grid_input_w",
+        )
+        ultra = entries["BK11TESTUNITBBBB"]
+        assert [ultra[key] for key in ac_keys] == [153.0, 153.0, 0.0]
+        es22 = entries["ES22TESTUNITAAAA"]
+        assert [es22[key] for key in ac_keys] == [0.0, 0.0, 0.0]
+
+
+def _f50_entries(path: Path) -> list[dict[int, float]]:
+    """Every `f50.1` entry of every `254/39` payload in a fixture, raw."""
+    from ecoflow_energy.ecoflow.parsers.stream_ac5000_proto import (
+        _decode_scalar,
+        _iter_fields,
+    )
+
+    hexes: list[str] = []
+
+    def find(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "hex" and isinstance(value, str):
+                    hexes.append(value)
+                else:
+                    find(value)
+        elif isinstance(node, list):
+            for item in node:
+                find(item)
+
+    find(json.loads(path.read_text(encoding="utf-8")))
+    entries = []
+    for frame_hex in hexes:
+        for header in decode_header_message(bytes.fromhex(frame_hex))[0]:
+            if (header.get("cmd_func"), header.get("cmd_id")) != (254, 39):
+                continue
+            for num, wire, raw in _iter_fields(bytes.fromhex(header["pdata"])):
+                if num != 50 or wire != 2:
+                    continue
+                for _n, _w, entry in _iter_fields(raw):
+                    entries.append(
+                        {
+                            n: _decode_scalar(w, value, "float")
+                            for n, w, value in _iter_fields(entry)
+                            if w == 5
+                        }
+                    )
+    return entries
+
+
+@pytest.mark.parametrize(
+    "path", [GET_REPLY, PUSHES, ES21_PV, ES21_PAIR, ES21_PAIR_BOTH, SOCKET_458]
+)
+def test_ac_power_closes_the_unit_balance(path: Path) -> None:
+    """`.4` (battery) = `.3` (solar) - `.7` (AC power) - `.8` (socket).
+
+    What makes `.7` this unit's AC power with output positive rather than a
+    guess: it closes the unit's own balance in every entry that carries it,
+    grid charging and discharging, with and without solar and socket load.
+    """
+    checked = 0
+    for entry in _f50_entries(path):
+        if 7 not in entry:
+            continue
+        expected = entry.get(3, 0.0) - entry[7] - entry.get(8, 0.0)
+        assert entry.get(4, 0.0) == pytest.approx(expected, abs=1.5), entry
+        checked += 1
+    assert checked
+
 
 class TestLinkedUnitBlock:
     """`f54` carries one entry per linked unit, each stamped with its serial."""
@@ -1404,7 +1483,7 @@ class TestLinkedPairPvStrings:
         parsed = parse_stream_ac5000_message(bytes.fromhex(frames[0]["hex"]))
         assert parsed is not None
         strings = next(iter(parsed[UNIT_PV_BY_SN_KEY].values()))
-        assert set(strings) - {UNIT_PV_ENTRY_SOC_KEY} == set(PV_KEYS)
+        assert set(strings) - {UNIT_PV_ENTRY_SOC_KEY} == set(PV_KEYS + AC_KEYS)
         assert strings["pv_total_w"] > 0
         present = [strings[f"pv{n}_w"] for n in (1, 2, 3, 4) if strings[f"pv{n}_w"] > 0]
         assert len(present) == 1
@@ -1494,7 +1573,7 @@ class TestLinkedPairPvStrings:
         result = parse_stream_ac5000_message(_build_frame(254, 39, bytes(block)))
         assert result is not None
         entries = result[UNIT_PV_BY_SN_KEY]
-        assert entries["ES21TESTUNITAAAA"] == dict.fromkeys(PV_KEYS, 0.0)
+        assert entries["ES21TESTUNITAAAA"] == dict.fromkeys(PV_KEYS + AC_KEYS, 0.0)
         assert entries["ES21TESTUNITBBBB"]["pv4_w"] == pytest.approx(40.0)
 
     def test_the_real_master_frames_carry_both_units(self) -> None:
@@ -2012,3 +2091,54 @@ class TestAcSocketOnBattery:
             assert abs(result["batt_w"]) < 10
             checked += 1
         assert checked == 21
+
+
+@pytest.mark.parametrize(
+    "path",
+    [GET_REPLY, ES21_PV, ES21_PAIR_BOTH, SOCKET_BATTERY_458],
+)
+def test_cycles_follow_the_lifetime_counters(path: Path) -> None:
+    """`32/50` field 14 is the BMS cycle count (`cycles`, as on the Delta 3).
+
+    Each reading sits within one cycle of the lifetime throughput (`50`
+    charged, `51` discharged, the smaller of the two) over the full capacity
+    `13`, which is what a cycle count is.
+    """
+    from ecoflow_energy.ecoflow.parsers.stream_ac5000_proto import (
+        _decode_scalar,
+        _iter_fields,
+    )
+
+    hexes: list[str] = []
+
+    def find(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "hex" and isinstance(value, str):
+                    hexes.append(value)
+                else:
+                    find(value)
+        elif isinstance(node, list):
+            for item in node:
+                find(item)
+
+    find(json.loads(path.read_text(encoding="utf-8")))
+    checked = 0
+    for frame_hex in hexes:
+        for header in decode_header_message(bytes.fromhex(frame_hex))[0]:
+            if (header.get("cmd_func"), header.get("cmd_id")) != (32, 50):
+                continue
+            raw = {
+                n: _decode_scalar(w, value, "int")
+                for n, w, value in _iter_fields(bytes.fromhex(header["pdata"]))
+                if w == 0
+            }
+            parsed = parse_stream_ac5000_message(
+                _build_frame(32, 50, bytes.fromhex(header["pdata"]))
+            )
+            assert parsed is not None
+            assert parsed["bms_cycles"] == raw[14]
+            throughput = min(raw[50], raw[51]) / raw[13]
+            assert abs(throughput - raw[14]) < 1, raw
+            checked += 1
+    assert checked

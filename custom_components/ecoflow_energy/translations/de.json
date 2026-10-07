@@ -585,6 +585,15 @@
       "unit_batt_discharge_energy_kwh": {
         "name": "Batterieentladeenergie dieser Einheit"
       },
+      "unit_ac_grid_power_w": {
+        "name": "AC-Netzanschlussleistung dieser Einheit"
+      },
+      "unit_ac_grid_input_w": {
+        "name": "AC-Netzanschluss Eingang dieser Einheit"
+      },
+      "unit_ac_grid_output_w": {
+        "name": "AC-Netzanschluss Ausgang dieser Einheit"
+      },
       "unit_soc_pct": {
         "name": "Batterieladezustand dieser Einheit"
       },

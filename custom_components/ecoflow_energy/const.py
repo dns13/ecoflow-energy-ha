@@ -4429,6 +4429,18 @@ STREAM_SENSORS: list[EcoFlowSensorDef] = [
         "mdi:battery-heart-variant",
         suggested_display_precision=0,
     ),
+    # From the BMS heartbeat (`32/50` field 14), which only the real-time
+    # connection carries; the Developer API quota has no cycle count.
+    EcoFlowSensorDef(
+        "bms_cycles",
+        "Battery Cycles",
+        None,
+        None,
+        "total_increasing",
+        "mdi:counter",
+        enhanced_only=True,
+        suggested_display_precision=0,
+    ),
     EcoFlowSensorDef(
         "batt_voltage_v",
         "Battery Voltage",
@@ -4696,6 +4708,15 @@ STREAMAC5000_SENSORS: list[EcoFlowSensorDef] = [
         "mdi:battery-heart-variant",
         suggested_display_precision=0,
     ),
+    EcoFlowSensorDef(
+        "bms_cycles",
+        "Battery Cycles",
+        None,
+        None,
+        "total_increasing",
+        "mdi:counter",
+        suggested_display_precision=0,
+    ),
     # --- battery power ---
     EcoFlowSensorDef(
         "batt_w",
@@ -4816,6 +4837,36 @@ STREAMAC5000_SENSORS: list[EcoFlowSensorDef] = [
         suggested_display_precision=0,
         accessory=True,
         accessory_needs_nonzero=True,
+    ),
+    # This unit's own power at its AC grid connection, from its `f50.1.7`
+    # entry: positive out of the unit, negative into it, with the split for
+    # the two directions. Not the AC socket, which is AC Output Power above.
+    EcoFlowSensorDef(
+        "unit_ac_grid_power_w",
+        "Unit AC Grid Connection Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:transmission-tower",
+        suggested_display_precision=0,
+    ),
+    EcoFlowSensorDef(
+        "unit_ac_grid_input_w",
+        "Unit AC Grid Connection Input",
+        "W",
+        "power",
+        "measurement",
+        "mdi:transmission-tower-import",
+        suggested_display_precision=0,
+    ),
+    EcoFlowSensorDef(
+        "unit_ac_grid_output_w",
+        "Unit AC Grid Connection Output",
+        "W",
+        "power",
+        "measurement",
+        "mdi:transmission-tower-export",
+        suggested_display_precision=0,
     ),
     EcoFlowSensorDef(
         "grid_export_power_w",
@@ -5588,6 +5639,7 @@ STREAM_MICRO_EXCLUDED_KEYS: frozenset[str] = frozenset(
         "batt_min_cell_temp_c",
         "batt_max_mos_temp_c",
         "batt_charge_discharge_state",
+        "bms_cycles",
         # The per-unit battery readings a linked STREAM AC 5000 hands over.
         "unit_batt_w",
         "unit_batt_charge_power_w",
