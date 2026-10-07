@@ -4321,6 +4321,28 @@ STREAM_SENSORS: list[EcoFlowSensorDef] = [
         "mdi:battery",
         suggested_display_precision=2,
     ),
+    # Integrated from the per-unit readings a linked STREAM AC 5000 hands
+    # over; accessory-gated like the power readings they come from.
+    EcoFlowSensorDef(
+        "unit_batt_charge_energy_kwh",
+        "Unit Battery Charge Energy",
+        "kWh",
+        "energy",
+        "total_increasing",
+        "mdi:battery-charging-outline",
+        suggested_display_precision=2,
+        accessory=True,
+    ),
+    EcoFlowSensorDef(
+        "unit_batt_discharge_energy_kwh",
+        "Unit Battery Discharge Energy",
+        "kWh",
+        "energy",
+        "total_increasing",
+        "mdi:battery-outline",
+        suggested_display_precision=2,
+        accessory=True,
+    ),
     EcoFlowSensorDef(
         "home_from_batt_w",
         "Home From Battery",
@@ -5296,6 +5318,30 @@ STREAMAC5000_SENSORS: list[EcoFlowSensorDef] = [
         "mdi:battery",
         suggested_display_precision=2,
     ),
+    # This unit's share of the two counters above, which count the group when
+    # units are linked. Off by default like the power readings they integrate.
+    EcoFlowSensorDef(
+        "unit_batt_charge_energy_kwh",
+        "Unit Battery Charge Energy",
+        "kWh",
+        "energy",
+        "total_increasing",
+        "mdi:battery-charging-outline",
+        "diagnostic",
+        suggested_display_precision=2,
+        disabled_by_default=True,
+    ),
+    EcoFlowSensorDef(
+        "unit_batt_discharge_energy_kwh",
+        "Unit Battery Discharge Energy",
+        "kWh",
+        "energy",
+        "total_increasing",
+        "mdi:battery-outline",
+        "diagnostic",
+        suggested_display_precision=2,
+        disabled_by_default=True,
+    ),
     EcoFlowSensorDef(
         "grid_import_energy_kwh",
         "Grid Import Energy",
@@ -5542,6 +5588,12 @@ STREAM_MICRO_EXCLUDED_KEYS: frozenset[str] = frozenset(
         "batt_min_cell_temp_c",
         "batt_max_mos_temp_c",
         "batt_charge_discharge_state",
+        # The per-unit battery readings a linked STREAM AC 5000 hands over.
+        "unit_batt_w",
+        "unit_batt_charge_power_w",
+        "unit_batt_discharge_power_w",
+        "unit_batt_charge_energy_kwh",
+        "unit_batt_discharge_energy_kwh",
         # The SoC limits (fields 270/271) are parsed but have no Stream entity of
         # their own, so there is nothing to exclude for them here.
         # Backup reserve is a battery control: the read-only sensor and the
@@ -9594,6 +9646,10 @@ STREAM_POWER_TO_ENERGY: dict[str, str] = {
     "home_w": "home_energy_kwh",
     "batt_charge_power_w": "batt_charge_energy_kwh",
     "batt_discharge_power_w": "batt_discharge_energy_kwh",
+    # Only a Stream linked to a STREAM AC 5000 receives these, handed over
+    # from the AC 5000's per-unit block.
+    "unit_batt_charge_power_w": "unit_batt_charge_energy_kwh",
+    "unit_batt_discharge_power_w": "unit_batt_discharge_energy_kwh",
 }
 
 STREAM_ENERGY_FROM_API: list[tuple[str, str]] = []
@@ -9610,6 +9666,10 @@ STREAMAC5000_POWER_TO_ENERGY: dict[str, str] = {
     # export each get an honest counter instead of one signed total.
     "grid_import_power_w": "grid_import_energy_kwh",
     "grid_export_power_w": "grid_export_energy_kwh",
+    # Per unit, from the signed `f54` entry: this unit's share of the two
+    # battery counters above, which count the whole group when units are linked.
+    "unit_batt_charge_power_w": "unit_batt_charge_energy_kwh",
+    "unit_batt_discharge_power_w": "unit_batt_discharge_energy_kwh",
 }
 
 STREAMAC5000_ENERGY_FROM_API: list[tuple[str, str]] = []
