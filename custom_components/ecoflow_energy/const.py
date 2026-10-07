@@ -4178,6 +4178,42 @@ STREAM_SENSORS: list[EcoFlowSensorDef] = [
         "mdi:battery",
         suggested_display_precision=0,
     ),
+    # The battery power the app shows for this unit, as a linked STREAM AC
+    # 5000 reports it in its per-unit block and hands over by serial. The
+    # three above are the BMS pack reading (DC side, about once a minute),
+    # which on a Stream Ultra beside an ES22 read 63 W of discharge while the
+    # app showed 7 W. Accessory-gated: only a unit linked to an ES22 ever
+    # receives these, so no other Stream gets a dead entity.
+    EcoFlowSensorDef(
+        "unit_batt_w",
+        "Unit Battery Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:battery-outline",
+        suggested_display_precision=0,
+        accessory=True,
+    ),
+    EcoFlowSensorDef(
+        "unit_batt_charge_power_w",
+        "Unit Battery Charge Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:battery-charging-outline",
+        suggested_display_precision=0,
+        accessory=True,
+    ),
+    EcoFlowSensorDef(
+        "unit_batt_discharge_power_w",
+        "Unit Battery Discharge Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:battery-outline",
+        suggested_display_precision=0,
+        accessory=True,
+    ),
     EcoFlowSensorDef(
         "ac_grid_connection_power_w",
         "AC Grid Connection Power",
@@ -4692,6 +4728,28 @@ STREAMAC5000_SENSORS: list[EcoFlowSensorDef] = [
         suggested_display_precision=0,
         disabled_by_default=True,
     ),
+    EcoFlowSensorDef(
+        "unit_batt_charge_power_w",
+        "Unit Battery Charge Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:battery-charging-outline",
+        "diagnostic",
+        suggested_display_precision=0,
+        disabled_by_default=True,
+    ),
+    EcoFlowSensorDef(
+        "unit_batt_discharge_power_w",
+        "Unit Battery Discharge Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:battery-outline",
+        "diagnostic",
+        suggested_display_precision=0,
+        disabled_by_default=True,
+    ),
     # --- power flow ---
     EcoFlowSensorDef(
         "home_w",
@@ -4767,6 +4825,20 @@ STREAMAC5000_SENSORS: list[EcoFlowSensorDef] = [
         "diagnostic",
         suggested_display_precision=0,
         disabled_by_default=True,
+    ),
+    # Solar to home, from the MPPT edge `f12.1`. The parser zero-fills it on
+    # every unit, so the entity waits for a non-zero reading: a unit without
+    # PV in its group never gets it.
+    EcoFlowSensorDef(
+        "home_from_solar_w",
+        "Home From Solar",
+        "W",
+        "power",
+        "measurement",
+        "mdi:home-lightning-bolt-outline",
+        suggested_display_precision=0,
+        accessory=True,
+        accessory_needs_nonzero=True,
     ),
     # Solar is accessory-gated rather than listed per prefix: whether a unit
     # has PV on the EcoFlow itself is a wiring choice, not a model difference.

@@ -50,7 +50,8 @@ Data shape:
   (issue #401), so the block is decoded one entry at a time and handed to
   the coordinator keyed by serial: see `_decode_pv_entry`.
 
-Not mapped: ``f50.1.4`` latches at rest (see the field map); ``f38.1`` and
+Not mapped: ``f50.1.4`` latches at rest (see the field map) and only lends
+its sign to the unsigned per-unit ``f54.1.4``; ``f38.1`` and
 ``f44`` repeat pack readings `32/50` already carries, and mapping both
 makes the keys flap; ``f38.1.3``/``f44.2`` look like a cycle count but
 read 497, 499 and 1311 within minutes; ``f33.9`` sat at 600 throughout and
@@ -89,6 +90,12 @@ _UNIT_POWER_SCALE = 0.5
 # Key the coordinator consumes and removes: the serial decides which unit a
 # reading belongs to, and only the coordinator knows which serial it is.
 UNIT_POWER_BY_SN_KEY = "_unit_batt_w_by_sn"
+# `f54.1.4` is a magnitude: a unit discharging 7 W reads 14, the same as one
+# charging 7 W. The direction comes from the signed `f50.1.4` of the same
+# serial when the frame carries it, else from the system battery power of the
+# same frame; see `_sign_unit_entries`. Internal, consumed in `_finalize`.
+_UNIT_DIRECTION_BY_SN_KEY = "_unit_batt_direction_by_sn"
+_PV_BATT_FIELD = 4
 # The same for the MPPT block: serial -> the five PV keys of that unit.
 UNIT_PV_BY_SN_KEY = "_unit_pv_by_sn"
 # Inside each `f50.1` entry: the state of charge the entry carries in `.2`,
@@ -134,9 +141,17 @@ _ES22_FIELD_MAP: dict[tuple[int, int], dict[str, tuple[str, str, float]]] = {
         # 308+130 = 438 = 876/2. Left out, a PV owner loses the whole
         # solar charge from the battery reading: two of those frames read
         # 34 W and 28 W into the pack and reported 0.
-        # `f12.1` also appears on that unit and stays unmapped: it does
-        # not close any node balance in the frames available.
+        # `.1` and `.3` are the other two edges out of the same MPPT node, to
+        # home and to grid. Together with `.2` they close it, `f11.3` halved:
+        # 314+103 = 417 = 834/2 and 449+2391+14 = 2854 = 5708/2 on the ES21
+        # pair captures, 133+34+20 = 187 = 374/2 on an ES22 linked to a Stream
+        # Ultra that carries the PV. The home node closes on `.1` (plus `.4`
+        # and `.6`) against `f11.1` halved in every frame of those captures,
+        # and `.3` (plus `.5`) closes the grid node against `f11.2` halved
+        # within the 0.5 W the half-watt rounding allows.
+        "12.1": ("home_from_solar_w", _TYPE_FLOAT, 1),
         "12.2": ("_mppt_to_batt_w", _TYPE_FLOAT, 1),
+        "12.3": ("_mppt_to_grid_w", _TYPE_FLOAT, 1),
         "12.4": ("home_from_batt_w", _TYPE_FLOAT, 1),
         "12.5": ("_batt_to_grid_w", _TYPE_FLOAT, 1),
         "12.6": ("home_from_grid_w", _TYPE_FLOAT, 1),
@@ -398,7 +413,12 @@ _ZERO_FILL_PATHS: dict[tuple[int, int], tuple[str, ...]] = {
         # of holding its last value; `ac_output_power_w` carries
         # `accessory_needs_nonzero` so the entity still waits for a load.
         "11.7",
+        # `.1` and `.3` are absent whenever no solar flows that way, which is
+        # a real zero like `.2`; unfilled, solar to home would hold its last
+        # daylight reading through the night.
+        "12.1",
         "12.2",
+        "12.3",
         "12.4",
         "12.5",
         "12.6",
@@ -994,6 +1014,7 @@ def _finalize(parsed: dict[str, Any]) -> dict[str, Any]:
     grid_to_socket = result.pop("_grid_to_socket_w", None)
     batt_to_socket = result.pop("_batt_to_socket_w", None)
     mppt_to_batt = result.pop("_mppt_to_batt_w", None)
+    mppt_to_grid = result.pop("_mppt_to_grid_w", None)
     solar_to_grid = result.pop("_solar_to_grid_w", None)
     solar_to_batt = result.pop("_solar_to_batt_w", None)
     home_from_grid = result.get("home_from_grid_w")
@@ -1013,7 +1034,11 @@ def _finalize(parsed: dict[str, Any]) -> dict[str, Any]:
     if isinstance(batt_to_grid, (int, float)):
         # A solar-to-grid edge only exists on a unit with PV attached; its
         # absence here means no such contribution, not an unknown one.
-        extra = float(solar_to_grid) if isinstance(solar_to_grid, (int, float)) else 0.0
+        extra = sum(
+            float(edge)
+            for edge in (solar_to_grid, mppt_to_grid)
+            if isinstance(edge, (int, float))
+        )
         result["grid_export_power_w"] = float(batt_to_grid) + extra
 
     # Signed battery power, positive is charge. All three zero-filled edges
@@ -1061,7 +1086,36 @@ def _finalize(parsed: dict[str, Any]) -> dict[str, Any]:
         # coordinator pops any parser-provided value and derives the state
         # from a hysteresis window over batt_w.
 
+    _sign_unit_entries(result)
     return result
+
+
+def _sign_unit_entries(result: dict[str, Any]) -> None:
+    """Give each per-unit `f54` magnitude the direction it is flowing in.
+
+    `f54.1.4` carries no sign. Across every capture on file (fifteen, single
+    units and linked pairs) a non-zero entry and the signed `f50.1.4` of the
+    same serial, where the frame carries it, point the same way as the
+    system battery power of that frame. `f50.1.4` is preferred because it is
+    per unit; it is not sent on every frame and latches at rest, which is
+    harmless here because `f54` itself reaches 0 and a 0 needs no sign. An
+    entry neither source can direct is left out, so the coordinator keeps its
+    last reading instead of publishing a discharge as a charge.
+    """
+    magnitudes = result.pop(UNIT_POWER_BY_SN_KEY, None)
+    directions = result.pop(_UNIT_DIRECTION_BY_SN_KEY, None) or {}
+    if not magnitudes:
+        return
+    system = result.get("batt_w")
+    signed: dict[str, float] = {}
+    for serial, watts in magnitudes.items():
+        direction = directions.get(serial) or system
+        if watts == 0:
+            signed[serial] = 0.0
+        elif isinstance(direction, (int, float)) and direction != 0:
+            signed[serial] = abs(watts) if direction > 0 else -abs(watts)
+    if signed:
+        result[UNIT_POWER_BY_SN_KEY] = signed
 
 
 def _iter_fields(payload: bytes) -> list[tuple[int, int, bytes]]:
@@ -1134,6 +1188,31 @@ def _read_unit_entries(payload: bytes) -> dict[str, float]:
             if serial and power is not None:
                 entries[serial] = float(power) * _UNIT_POWER_SCALE
     return entries
+
+
+def _read_unit_directions(payload: bytes) -> dict[str, float]:
+    """Return the signed `f50.1.4` battery power per unit serial.
+
+    Used only for its sign: see `_sign_unit_entries`. An entry without the
+    field (zero, or a unit at rest) is left out.
+    """
+    directions: dict[str, float] = {}
+    for number, wire_type, raw in _iter_fields(payload):
+        if number != 50 or wire_type != 2:
+            continue
+        for entry_num, entry_wire, entry_raw in _iter_fields(raw):
+            if entry_num != 1 or entry_wire != 2:
+                continue
+            serial: str | None = None
+            power: float | int | None = None
+            for num, wire, value in _iter_fields(entry_raw):
+                if num == _PV_SERIAL_FIELD and wire == 2:
+                    serial = _serial_text(value)
+                elif num == _PV_BATT_FIELD and wire == 5:
+                    power = _decode_scalar(5, value, _TYPE_FLOAT)
+            if serial and isinstance(power, float) and isfinite(power):
+                directions[serial] = power
+    return directions
 
 
 def _pdata_candidates(header: dict[str, Any]) -> list[bytes]:
@@ -1213,12 +1292,15 @@ def parse_stream_ac5000_message(payload: bytes) -> dict[str, Any] | None:
                 if cmd_key == _CMD_TELEMETRY:
                     try:
                         unit_entries = _read_unit_entries(pdata)
+                        unit_directions = _read_unit_directions(pdata)
                     except (IndexError, ValueError):
                         # A malformed per-unit block costs its own reading,
                         # never the telemetry that already decoded cleanly.
-                        unit_entries = {}
+                        unit_entries, unit_directions = {}, {}
                     if unit_entries:
                         decoded[UNIT_POWER_BY_SN_KEY] = unit_entries
+                    if unit_directions:
+                        decoded[_UNIT_DIRECTION_BY_SN_KEY] = unit_directions
                 merged.update(decoded)
                 break
             # A decode error is contained to the message that caused it: the

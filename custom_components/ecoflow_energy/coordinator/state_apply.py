@@ -222,6 +222,15 @@ class StateApplyMixin(_Base):
                 else:
                     stats["units_held"] = stats.get("units_held", 0) + 1
 
+        # The parser signs the entry (positive is charge), so the split is the
+        # same one the system battery power gets.
+        unit_w = parsed.get("unit_batt_w")
+        if isinstance(unit_w, (int, float)):
+            parsed["unit_batt_charge_power_w"] = float(unit_w) if unit_w > 0 else 0.0
+            parsed["unit_batt_discharge_power_w"] = (
+                -float(unit_w) if unit_w < 0 else 0.0
+            )
+
         if isinstance(strings, dict) and strings:
             own_strings = strings.get(self.device_sn)
             if own_connection:
