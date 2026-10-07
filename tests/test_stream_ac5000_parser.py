@@ -1006,8 +1006,8 @@ class TestUltraPvPair:
         es22, ultra = "ES22TESTUNITAAAA", "BK11TESTUNITBBBB"
         assert frames["08:55:08"]["_unit_batt_w_by_sn"] == {es22: 0.0, ultra: 12.0}
         assert frames["08:55:05"]["_unit_batt_w_by_sn"] == {es22: 0.0, ultra: -1.5}
-        # No `f50` in this push: the sign comes from the system flow, where
-        # the battery feeds 15 W of the house.
+        # No `f50` in this push, but the ES22 reads 0: the Ultra is the whole
+        # system, where the battery feeds 15 W of the house.
         assert frames["08:57:03"]["_unit_batt_w_by_sn"] == {es22: 0.0, ultra: -17.5}
 
     def test_each_unit_gets_its_own_ac_power(self) -> None:
@@ -1118,7 +1118,10 @@ class TestLinkedUnitBlock:
         assert result["_unit_batt_w_by_sn"] == {"ES22TESTUNITAAAA": -7.0}
 
     def test_the_units_own_f50_sign_wins_over_the_system(self) -> None:
-        """Two units can flow opposite ways; `f50.1.4` is the per-unit sign."""
+        """Two units can flow opposite ways; `f50.1.4` is the per-unit sign.
+
+        The unit without one goes out unsigned for its own BMS to direct.
+        """
         f50 = _sub(
             50,
             _sub(
@@ -1135,41 +1138,50 @@ class TestLinkedUnitBlock:
         payload = bytes(_edges(from_grid=88.0)) + bytes(f50) + bytes(block)
         result = parse_stream_ac5000_message(_build_frame(254, 39, payload))
         assert result is not None
-        assert result["_unit_batt_w_by_sn"] == {
-            "ES22TESTUNITAAAA": 100.0,
-            "ES22TESTUNITBBBB": -12.0,
-        }
+        assert result["_unit_batt_w_by_sn"] == {"ES22TESTUNITBBBB": -12.0}
+        assert result["_unit_batt_w_unsigned_by_sn"] == {"ES22TESTUNITAAAA": 100.0}
 
-    def test_units_flowing_opposite_ways_keep_their_own_sign(self) -> None:
-        """A push without `f50`: the AC 5000 gives 300 W, the Ultra takes 200 W.
+    def test_two_active_units_without_f50_go_out_unsigned(self) -> None:
+        """A push while 300 W move from the AC 5000 into the Ultra.
 
-        The system reads -100 W. Copying that sign turned the charging Ultra
-        into a 200 W discharge on every push; the sum fixes both signs.
+        The system reads -12 W; no sign of either unit follows from it. Both
+        the system sign and a fit to the system sum flipped them.
         """
         block = _sub(
             54,
             _unit_entry(b"ES22TESTUNITAAAA", soc=50, half_watts=600)
-            + _unit_entry(b"BK11TESTUNITBBBB", soc=40, half_watts=400),
+            + _unit_entry(b"BK11TESTUNITBBBB", soc=40, half_watts=580),
         )
-        payload = bytes(_edges(to_home=100.0)) + bytes(block)
-        result = parse_stream_ac5000_message(_build_frame(254, 39, payload))
-        assert result is not None
-        assert result["_unit_batt_w_by_sn"] == {
-            "ES22TESTUNITAAAA": -300.0,
-            "BK11TESTUNITBBBB": 200.0,
-        }
-
-    def test_signs_the_sum_cannot_tell_apart_are_held_back(self) -> None:
-        """Equal magnitudes against a zero system fit either way round."""
-        block = _sub(
-            54,
-            _unit_entry(b"ES22TESTUNITAAAA", soc=50, half_watts=400)
-            + _unit_entry(b"BK11TESTUNITBBBB", soc=40, half_watts=400),
-        )
-        payload = bytes(_edges(to_home=0.0)) + bytes(block)
+        payload = bytes(_edges(to_home=12.0)) + bytes(block)
         result = parse_stream_ac5000_message(_build_frame(254, 39, payload))
         assert result is not None
         assert "_unit_batt_w_by_sn" not in result
+        assert result["_unit_batt_w_unsigned_by_sn"] == {
+            "ES22TESTUNITAAAA": 300.0,
+            "BK11TESTUNITBBBB": 290.0,
+        }
+
+    def test_unsigned_entries_take_their_units_bms_direction(self) -> None:
+        from ecoflow_energy.ecoflow.parsers.stream_ac5000_proto import (
+            sign_by_unit_direction,
+        )
+
+        directions = {"ES22TESTUNITAAAA": -1.0, "BK11TESTUNITBBBB": 1.0}
+        signed = sign_by_unit_direction(
+            {"ES22TESTUNITAAAA": 300.0, "BK11TESTUNITBBBB": 290.0, "UNKNOWN": 5.0},
+            directions.get,
+        )
+        assert signed == {"ES22TESTUNITAAAA": -300.0, "BK11TESTUNITBBBB": 290.0}
+
+    def test_bms_heartbeat_reports_the_units_own_direction(self) -> None:
+        """32/50 fields 26/27, as the ES22 sent them at 14:41 and 14:46."""
+        for charge, discharge, expected in ((426, 0, 426.0), (0, 44, -44.0)):
+            payload = encode_field_varint(26, charge) + encode_field_varint(
+                27, discharge
+            )
+            result = parse_stream_ac5000_message(_build_frame(32, 50, payload))
+            assert result is not None
+            assert result["_bms_batt_w"] == expected
 
     def test_an_entry_without_a_direction_is_held_back(self) -> None:
         """Unsigned, a discharge would publish as a charge; a zero needs none."""

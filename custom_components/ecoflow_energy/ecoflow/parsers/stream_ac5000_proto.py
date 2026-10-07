@@ -64,11 +64,12 @@ from __future__ import annotations
 
 import logging
 import struct
-from itertools import product
+from collections.abc import Callable
 from math import isfinite
 from typing import Any
 
 from ..proto.decoder import decode_header_message
+from .stream_proto import BMS_BATT_W_KEY
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -93,11 +94,14 @@ _UNIT_POWER_SCALE = 0.5
 UNIT_POWER_BY_SN_KEY = "_unit_batt_w_by_sn"
 # `f54.1.4` is a magnitude: a unit discharging 7 W reads 14, the same as one
 # charging 7 W. The direction comes from the signed `f50.1.4` of the same
-# serial when the frame carries it, else from the signs that add up to the
-# system battery power of the same frame; see `_sign_unit_entries`.
-# Internal, consumed in `_finalize`.
+# serial when the frame carries it; see `_sign_unit_entries`. Internal,
+# consumed in `_finalize`.
 _UNIT_DIRECTION_BY_SN_KEY = "_unit_batt_direction_by_sn"
 _PV_BATT_FIELD = 4
+# Entries `_sign_unit_entries` could not direct, serial -> unsigned watts. The
+# coordinator signs them with each unit's own BMS direction (`BMS_BATT_W_KEY`)
+# and removes the key.
+UNIT_POWER_UNSIGNED_BY_SN_KEY = "_unit_batt_w_unsigned_by_sn"
 # The same for the MPPT block: serial -> the five PV keys of that unit.
 UNIT_PV_BY_SN_KEY = "_unit_pv_by_sn"
 # Inside each `f50.1` entry: the state of charge the entry carries in `.2`,
@@ -397,6 +401,11 @@ _ES22_FIELD_MAP: dict[tuple[int, int], dict[str, tuple[str, str, float]]] = {
         # points above the system SoC the app shows (20.93 vs 18.63 in the
         # same second).
         "25": ("bms_soc_precise_pct", _TYPE_FLOAT, 1),
+        # The unit's own battery power split by direction, as on the BK
+        # series. 14:41 on a linked pair: 426 W into this pack while the
+        # Ultra's own heartbeat read 419 W out, the system near zero.
+        "26": ("_bms_charge_power_w", _TYPE_INT, 1),
+        "27": ("_bms_discharge_power_w", _TYPE_INT, 1),
     },
 }
 
@@ -1115,6 +1124,12 @@ def _finalize(parsed: dict[str, Any]) -> dict[str, Any]:
         # coordinator pops any parser-provided value and derives the state
         # from a hysteresis window over batt_w.
 
+    bms_charge = result.pop("_bms_charge_power_w", None)
+    bms_discharge = result.pop("_bms_discharge_power_w", None)
+    # Both or nothing, as in `stream_proto`: each is sent with the other 0.
+    if isinstance(bms_charge, (int, float)) and isinstance(bms_discharge, (int, float)):
+        result[BMS_BATT_W_KEY] = float(bms_charge) - float(bms_discharge)
+
     _sign_unit_entries(result)
     return result
 
@@ -1125,54 +1140,53 @@ def _sign_unit_entries(result: dict[str, Any]) -> None:
     `f54.1.4` carries no sign. The signed `f50.1.4` of the same serial is
     the per-unit direction, but only a polled reply carries it; the pushes in
     between carry `f54` alone. `f50.1.4` latches at rest, which is harmless
-    because `f54` itself reaches 0 and a 0 needs no sign.
+    because `f54` itself reaches 0 and a 0 needs no sign. The only non-zero
+    entry is the whole system, so the system sign is its sign.
 
-    An entry without `f50` takes the signs that make the units add up to the
-    system battery power of the same frame (the system is their sum, within
-    a few watts). Copying the system sign instead, as before, flipped a
-    charging Ultra to discharge on every push while the AC 5000 next to it
-    discharged more than the Ultra charged. A single unit is the same rule
-    with one entry. Signs the sum cannot tell apart (two equal magnitudes
-    flowing opposite ways) are left out, so the coordinator keeps its last
-    reading instead of publishing a discharge as a charge.
+    Anything else goes out unsigned for the coordinator to direct with the
+    unit's own BMS reading. Deriving it from the system was wrong both ways
+    it was tried: copying the system sign flipped a charging Ultra whenever
+    the AC 5000 beside it discharged more, and fitting the signs to the
+    system sum flipped both units while energy moved from one into the
+    other, when the two magnitudes sit a conversion loss apart.
     """
     magnitudes = result.pop(UNIT_POWER_BY_SN_KEY, None)
     directions = result.pop(_UNIT_DIRECTION_BY_SN_KEY, None) or {}
     if not magnitudes:
         return
+    alone = sum(1 for watts in magnitudes.values() if watts) == 1
     signed: dict[str, float] = {}
-    open_serials: list[str] = []
+    unsigned: dict[str, float] = {}
     for serial, watts in magnitudes.items():
         direction = directions.get(serial)
+        if not direction and alone:
+            direction = result.get("batt_w")
         if watts == 0:
             signed[serial] = 0.0
-        elif direction:
+        elif isinstance(direction, (int, float)) and direction:
             signed[serial] = abs(watts) if direction > 0 else -abs(watts)
         else:
-            open_serials.append(serial)
-    system = result.get("batt_w")
-    if open_serials and isinstance(system, (int, float)):
-        known = sum(signed.values())
-        fits = sorted(
-            (
-                abs(
-                    known
-                    + sum(
-                        sign * abs(magnitudes[serial])
-                        for sign, serial in zip(signs, open_serials, strict=True)
-                    )
-                    - system
-                ),
-                signs,
-            )
-            for signs in product((1, -1), repeat=len(open_serials))
-        )
-        best_error, best = fits[0]
-        if fits[1][0] - best_error >= 1.0:
-            for sign, serial in zip(best, open_serials, strict=True):
-                signed[serial] = sign * abs(magnitudes[serial])
+            unsigned[serial] = abs(watts)
     if signed:
         result[UNIT_POWER_BY_SN_KEY] = signed
+    if unsigned:
+        result[UNIT_POWER_UNSIGNED_BY_SN_KEY] = unsigned
+
+
+def sign_by_unit_direction(
+    unsigned: dict[str, float], direction_of: Callable[[str], float | None]
+) -> dict[str, float]:
+    """Sign each unsigned entry by its unit's own last BMS direction.
+
+    An entry whose unit has not reported a direction yet is left out, so the
+    coordinator keeps its last reading instead of guessing.
+    """
+    signed: dict[str, float] = {}
+    for serial, watts in unsigned.items():
+        direction = direction_of(serial)
+        if direction:
+            signed[serial] = watts if direction > 0 else -watts
+    return signed
 
 
 def _iter_fields(payload: bytes) -> list[tuple[int, int, bytes]]:

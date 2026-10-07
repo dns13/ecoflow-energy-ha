@@ -528,6 +528,8 @@ class TestStreamGroupCaptureReplay:
         assert result["batt_charge_power_w"] == charge
         assert result["batt_discharge_power_w"] == discharge
         assert result["batt_w"] == charge - discharge
+        # The unit's own direction for the per-unit `f54` entries.
+        assert result["_bms_batt_w"] == charge - discharge
 
     @pytest.mark.parametrize(
         ("label", "cycles"),
