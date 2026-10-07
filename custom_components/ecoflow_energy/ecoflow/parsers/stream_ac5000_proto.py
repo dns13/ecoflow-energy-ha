@@ -64,6 +64,7 @@ from __future__ import annotations
 
 import logging
 import struct
+from itertools import product
 from math import isfinite
 from typing import Any
 
@@ -92,8 +93,9 @@ _UNIT_POWER_SCALE = 0.5
 UNIT_POWER_BY_SN_KEY = "_unit_batt_w_by_sn"
 # `f54.1.4` is a magnitude: a unit discharging 7 W reads 14, the same as one
 # charging 7 W. The direction comes from the signed `f50.1.4` of the same
-# serial when the frame carries it, else from the system battery power of the
-# same frame; see `_sign_unit_entries`. Internal, consumed in `_finalize`.
+# serial when the frame carries it, else from the signs that add up to the
+# system battery power of the same frame; see `_sign_unit_entries`.
+# Internal, consumed in `_finalize`.
 _UNIT_DIRECTION_BY_SN_KEY = "_unit_batt_direction_by_sn"
 _PV_BATT_FIELD = 4
 # The same for the MPPT block: serial -> the five PV keys of that unit.
@@ -1120,27 +1122,55 @@ def _finalize(parsed: dict[str, Any]) -> dict[str, Any]:
 def _sign_unit_entries(result: dict[str, Any]) -> None:
     """Give each per-unit `f54` magnitude the direction it is flowing in.
 
-    `f54.1.4` carries no sign. Across every capture on file (fifteen, single
-    units and linked pairs) a non-zero entry and the signed `f50.1.4` of the
-    same serial, where the frame carries it, point the same way as the
-    system battery power of that frame. `f50.1.4` is preferred because it is
-    per unit; it is not sent on every frame and latches at rest, which is
-    harmless here because `f54` itself reaches 0 and a 0 needs no sign. An
-    entry neither source can direct is left out, so the coordinator keeps its
-    last reading instead of publishing a discharge as a charge.
+    `f54.1.4` carries no sign. The signed `f50.1.4` of the same serial is
+    the per-unit direction, but only a polled reply carries it; the pushes in
+    between carry `f54` alone. `f50.1.4` latches at rest, which is harmless
+    because `f54` itself reaches 0 and a 0 needs no sign.
+
+    An entry without `f50` takes the signs that make the units add up to the
+    system battery power of the same frame (the system is their sum, within
+    a few watts). Copying the system sign instead, as before, flipped a
+    charging Ultra to discharge on every push while the AC 5000 next to it
+    discharged more than the Ultra charged. A single unit is the same rule
+    with one entry. Signs the sum cannot tell apart (two equal magnitudes
+    flowing opposite ways) are left out, so the coordinator keeps its last
+    reading instead of publishing a discharge as a charge.
     """
     magnitudes = result.pop(UNIT_POWER_BY_SN_KEY, None)
     directions = result.pop(_UNIT_DIRECTION_BY_SN_KEY, None) or {}
     if not magnitudes:
         return
-    system = result.get("batt_w")
     signed: dict[str, float] = {}
+    open_serials: list[str] = []
     for serial, watts in magnitudes.items():
-        direction = directions.get(serial) or system
+        direction = directions.get(serial)
         if watts == 0:
             signed[serial] = 0.0
-        elif isinstance(direction, (int, float)) and direction != 0:
+        elif direction:
             signed[serial] = abs(watts) if direction > 0 else -abs(watts)
+        else:
+            open_serials.append(serial)
+    system = result.get("batt_w")
+    if open_serials and isinstance(system, (int, float)):
+        known = sum(signed.values())
+        fits = sorted(
+            (
+                abs(
+                    known
+                    + sum(
+                        sign * abs(magnitudes[serial])
+                        for sign, serial in zip(signs, open_serials, strict=True)
+                    )
+                    - system
+                ),
+                signs,
+            )
+            for signs in product((1, -1), repeat=len(open_serials))
+        )
+        best_error, best = fits[0]
+        if fits[1][0] - best_error >= 1.0:
+            for sign, serial in zip(best, open_serials, strict=True):
+                signed[serial] = sign * abs(magnitudes[serial])
     if signed:
         result[UNIT_POWER_BY_SN_KEY] = signed
 

@@ -1140,6 +1140,37 @@ class TestLinkedUnitBlock:
             "ES22TESTUNITBBBB": -12.0,
         }
 
+    def test_units_flowing_opposite_ways_keep_their_own_sign(self) -> None:
+        """A push without `f50`: the AC 5000 gives 300 W, the Ultra takes 200 W.
+
+        The system reads -100 W. Copying that sign turned the charging Ultra
+        into a 200 W discharge on every push; the sum fixes both signs.
+        """
+        block = _sub(
+            54,
+            _unit_entry(b"ES22TESTUNITAAAA", soc=50, half_watts=600)
+            + _unit_entry(b"BK11TESTUNITBBBB", soc=40, half_watts=400),
+        )
+        payload = bytes(_edges(to_home=100.0)) + bytes(block)
+        result = parse_stream_ac5000_message(_build_frame(254, 39, payload))
+        assert result is not None
+        assert result["_unit_batt_w_by_sn"] == {
+            "ES22TESTUNITAAAA": -300.0,
+            "BK11TESTUNITBBBB": 200.0,
+        }
+
+    def test_signs_the_sum_cannot_tell_apart_are_held_back(self) -> None:
+        """Equal magnitudes against a zero system fit either way round."""
+        block = _sub(
+            54,
+            _unit_entry(b"ES22TESTUNITAAAA", soc=50, half_watts=400)
+            + _unit_entry(b"BK11TESTUNITBBBB", soc=40, half_watts=400),
+        )
+        payload = bytes(_edges(to_home=0.0)) + bytes(block)
+        result = parse_stream_ac5000_message(_build_frame(254, 39, payload))
+        assert result is not None
+        assert "_unit_batt_w_by_sn" not in result
+
     def test_an_entry_without_a_direction_is_held_back(self) -> None:
         """Unsigned, a discharge would publish as a charge; a zero needs none."""
         block = _sub(
