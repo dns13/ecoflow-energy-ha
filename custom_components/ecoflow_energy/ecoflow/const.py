@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
+from typing import Any
 
 # MQTT Broker
 MQTT_HOST = "mqtt-e.ecoflow.com"
@@ -67,6 +68,37 @@ DEVICE_TYPE_WAVE3 = "wave3"
 # `proto/runtime.py`); that relay path is retired in the same change that
 # adds this type, so a `C376` is never read twice (#7, #247).
 DEVICE_TYPE_POWERPULSE2 = "powerpulse2"
+# PowerPulse 2 display block (settings report `1.4.8.21`, PLAN-188, issue
+# #495): the brightness percentages the wallbox accepts and reports for its
+# LED indicator and its screen. Four steps; any other byte is not a value the
+# app sends and is neither published nor written.
+POWERPULSE2_DISPLAY_BRIGHTNESS_STEPS: tuple[int, ...] = (25, 50, 75, 100)
+# The four named bytes of the display block, in wire order (byte 0 first). The
+# parser, the coordinator's write and the payload builder all take the layout
+# from this one tuple; the first two are on/off bytes, the last two brightness.
+POWERPULSE2_DISPLAY_KEYS: tuple[str, ...] = (
+    "ev_led_enabled",
+    "ev_screen_enabled",
+    "ev_led_brightness_pct",
+    "ev_screen_brightness_pct",
+)
+POWERPULSE2_DISPLAY_SWITCH_KEYS: frozenset[str] = frozenset(
+    POWERPULSE2_DISPLAY_KEYS[:2]
+)
+
+
+def powerpulse2_display_value_valid(key: str, value: Any) -> bool:
+    """Whether `value` is one the wallbox takes for the display byte `key`.
+
+    An on/off byte takes 0 or 1 (a bool counts), a brightness byte one of
+    `POWERPULSE2_DISPLAY_BRIGHTNESS_STEPS`. The one rule behind the parser's
+    validation, the write's checks and the builder's last line of defence.
+    """
+    if key in POWERPULSE2_DISPLAY_SWITCH_KEYS:
+        return type(value) in (bool, int) and value in (0, 1)
+    return type(value) is int and value in POWERPULSE2_DISPLAY_BRIGHTNESS_STEPS
+
+
 # Ocean 2 home battery (`RE11`, `RE17`, `RE41`, `RE42`, `RE43`). Enhanced-only
 # and reached through the serial prefix alone: the Developer API refuses every
 # quota read for it with error 1006, and neither channel carries a product name

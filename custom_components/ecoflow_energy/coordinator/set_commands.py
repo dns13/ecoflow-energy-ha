@@ -34,6 +34,10 @@ from ..const import (
 from ..ecoflow.const import (
     POWEROCEAN_FEED_SCHEDULE_POWER_MIN_W,
     POWEROCEAN_SCHEDULE_POWER_STEP_W,
+    POWERPULSE2_DISPLAY_BRIGHTNESS_STEPS,
+    POWERPULSE2_DISPLAY_KEYS,
+    POWERPULSE2_DISPLAY_SWITCH_KEYS,
+    powerpulse2_display_value_valid,
     schedule_power_max_w,
     schedule_power_min_w,
 )
@@ -55,12 +59,22 @@ class _SettingsWrite:
     `fields` is the `EDevPileParamSet` write field number -> value map the
     payload builder takes, `expected_value` what the wallbox must report back
     on the write's state key, and `bit_mask` (switch-bits writes only) which
-    bits of that reading count as the confirmation.
+    bits of that reading count as the confirmation. `display` (PLAN-188) is
+    the four known bytes of the display block, `(LED on, Screen on, LED
+    brightness %, Screen brightness %)`: a display write sends that block
+    alone through its own builder and leaves `fields` empty.
     """
 
     fields: dict[int, int]
     expected_value: float
     bit_mask: int | None = None
+    display: tuple[int, int, int, int] | None = None
+
+    def __post_init__(self) -> None:
+        if self.display is not None and self.fields:
+            raise ValueError("a display write sends the display block alone")
+        if self.display is None and not self.fields:
+            raise ValueError("a settings write needs fields or a display block")
 
 
 def _describe_amps(value: Any) -> str:
@@ -75,6 +89,27 @@ def _describe_switch_bit(bits: Any, mask: int) -> str:
     if type(bits) is not int:
         return "no value yet"
     return "on" if bits & mask else "off"
+
+
+# PLAN-188: the name the refusal text gives each display value, in the byte
+# order of the display block (`POWERPULSE2_DISPLAY_KEYS`: `ev_led_enabled` is
+# byte 0 ... `ev_screen_brightness_pct` byte 3).
+_POWERPULSE2_DISPLAY_BYTES: tuple[tuple[str, str], ...] = tuple(
+    zip(
+        POWERPULSE2_DISPLAY_KEYS,
+        ("LED indicator", "screen", "LED brightness", "screen brightness"),
+        strict=True,
+    )
+)
+
+
+def _describe_display(key: str, reported: Any) -> str:
+    """One reported display value as the not-confirmed text shows it."""
+    if not powerpulse2_display_value_valid(key, reported):
+        return "no value yet"
+    if key in POWERPULSE2_DISPLAY_SWITCH_KEYS:
+        return "on" if reported else "off"
+    return f"{reported} %"
 
 
 class DeviceValueNotReported(Exception):
@@ -1833,16 +1868,20 @@ class SetCommandsMixin(_Base):
     ) -> None:
         """Publish one PowerPulse 2 settings write and wait for its read-back.
 
-        The shared body of the four settings writes (PLAN-172): the sibling-only
-        routing, the pending-record lifecycle and the confirmation wait outside
-        the lock all follow `async_set_powerpulse_max_current`. The caller has
+        The shared body of the PowerPulse 2 settings writes (PLAN-172, PLAN-188):
+        the sibling-only routing, the pending-record lifecycle and the
+        confirmation wait outside the lock all follow
+        `async_set_powerpulse_max_current`. The caller has
         already range-checked its own value. `plan` runs inside the lock, after
         every route check and immediately before the payload is built, so a
         write that depends on the latest settings report (Continuous charging)
         reads it at dispatch time and not before a lock wait. It may raise
         `HomeAssistantError` itself.
         """
-        from ..ecoflow.energy_stream import build_powerpulse_param_set_settings_payload
+        from ..ecoflow.energy_stream import (
+            build_powerpulse_param_set_display_payload,
+            build_powerpulse_param_set_settings_payload,
+        )
         from .core import WallboxActionPending
 
         async with self._wallbox_action_lock:
@@ -1902,9 +1941,14 @@ class SetCommandsMixin(_Base):
                 )
             write = plan()
             try:
-                payload = build_powerpulse_param_set_settings_payload(
-                    write.fields, dev_addr, dev_sn, sibling.device_sn
-                )
+                if write.display is not None:
+                    payload = build_powerpulse_param_set_display_payload(
+                        *write.display, dev_addr, dev_sn, sibling.device_sn
+                    )
+                else:
+                    payload = build_powerpulse_param_set_settings_payload(
+                        write.fields, dev_addr, dev_sn, sibling.device_sn
+                    )
             except ValueError:
                 # The caller's value is already validated; a ValueError here
                 # can only be a malformed serial, the same failure mode as
@@ -2131,6 +2175,114 @@ class SetCommandsMixin(_Base):
             not_confirmed_key="powerpulse_continuous_not_confirmed",
             plan=plan,
             describe_reported=lambda bits: _describe_switch_bit(bits, bit),
+        )
+
+    async def async_set_powerpulse_display(self, key: str, value: float) -> None:
+        """Set one value of the wallbox's display block (PLAN-188, issue #495).
+
+        `key` is one of `ev_led_enabled`, `ev_screen_enabled` (`value` 0 or 1,
+        a bool is accepted), `ev_led_brightness_pct` and
+        `ev_screen_brightness_pct` (`value` one of
+        `POWERPULSE2_DISPLAY_BRIGHTNESS_STEPS`, an `int`; a non-integer
+        value is refused with `powerpulse_display_brightness_invalid`, like any
+        value that is not one of the steps). The wallbox takes
+        the display as one six-byte value (field 21 of `EDevPileParamSet`),
+        so the write rebuilds `[LED on, Screen on, LED brightness, Screen
+        brightness, 0, 0]` from the latest settings report, changes the one
+        byte that is asked for and sends that block alone. The two trailing
+        bytes are the wallbox's own and are always sent as 0, never copied from
+        the report. A brightness is writable while the screen or the LED is
+        off: the write does not look at the on/off state.
+
+        The report is read at dispatch time inside the lock (`plan`), like the
+        switch-bit write: refused when there is none (`report_missing`, waiting
+        helps), when it is older than `POWERPULSE2_SETTINGS_MAX_AGE_S`
+        (`report_stale`), or when a value in it is not one the builder can send
+        or is absent from a settings report that was received
+        (`report_unusable`: the parser leaves out a byte that is not a value
+        the wallbox takes, and waiting does not help). Confirmed when
+        a frame arriving after the write reports `key` at the requested value;
+        nothing is published optimistically. The refusal and confirmation texts
+        reuse the `powerpulse_continuous_*` keys, as the three settings
+        switches do.
+        """
+        if key not in POWERPULSE2_DISPLAY_KEYS:
+            raise ValueError(f"{key!r} is not a PowerPulse 2 display value")
+        index = POWERPULSE2_DISPLAY_KEYS.index(key)
+        if key in POWERPULSE2_DISPLAY_SWITCH_KEYS:
+            if not powerpulse2_display_value_valid(key, value):
+                raise ValueError(f"{key} takes 0 or 1, got {value!r}")
+        elif not powerpulse2_display_value_valid(key, value):
+            raise HomeAssistantError(
+                translation_domain=DOMAIN,
+                translation_key="powerpulse_display_brightness_invalid",
+                translation_placeholders={
+                    "allowed": ", ".join(
+                        str(step) for step in POWERPULSE2_DISPLAY_BRIGHTNESS_STEPS
+                    ),
+                    "value": str(value),
+                },
+            )
+        target = int(value)
+
+        def plan() -> _SettingsWrite:
+            report = self._settings_report
+            if report is None:
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="powerpulse_continuous_report_missing",
+                )
+            received_at, values = report
+            if time.monotonic() - received_at > POWERPULSE2_SETTINGS_MAX_AGE_S:
+                raise HomeAssistantError(
+                    translation_domain=DOMAIN,
+                    translation_key="powerpulse_continuous_report_stale",
+                )
+            block: list[int] = []
+            for name, label in _POWERPULSE2_DISPLAY_BYTES:
+                reported = values.get(name)
+                if reported is None:
+                    if "ev_settings_switch_bits" in values:
+                        # A settings report was received and the parser left
+                        # this byte out as not a value the wallbox takes:
+                        # waiting for the next report does not help.
+                        raise HomeAssistantError(
+                            translation_domain=DOMAIN,
+                            translation_key="powerpulse_continuous_report_unusable",
+                            translation_placeholders={
+                                "field": label,
+                                "value": "no valid value",
+                            },
+                        )
+                    raise HomeAssistantError(
+                        translation_domain=DOMAIN,
+                        translation_key="powerpulse_continuous_report_missing",
+                    )
+                if not powerpulse2_display_value_valid(name, reported):
+                    raise HomeAssistantError(
+                        translation_domain=DOMAIN,
+                        translation_key="powerpulse_continuous_report_unusable",
+                        translation_placeholders={
+                            "field": label,
+                            "value": str(reported),
+                        },
+                    )
+                block.append(int(reported))
+            block[index] = target
+            led_on, screen_on, led_pct, screen_pct = block
+            return _SettingsWrite(
+                {},
+                float(target),
+                display=(led_on, screen_on, led_pct, screen_pct),
+            )
+
+        await self._async_write_powerpulse_settings(
+            action=key.removeprefix("ev_"),
+            state_key=key,
+            needs_powerocean_key="powerpulse_continuous_needs_powerocean",
+            not_confirmed_key="powerpulse_continuous_not_confirmed",
+            plan=plan,
+            describe_reported=lambda reported: _describe_display(key, reported),
         )
 
     def _require_wallbox_action_state(self, action: Literal["start", "stop"]) -> None:
