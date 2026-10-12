@@ -44,6 +44,8 @@ All notable changes to this project will be documented in this file.
 
 - Stream units and the STREAM AC 5000 show Battery Cycles, the charge cycles the battery management has counted for the unit's own pack, in Enhanced Mode. It is field 14 of the battery heartbeat, the field the Delta 3 reads as its cycle count, and it sits within one cycle of the lifetime charge over the full capacity: 4 against 4.7 on an AC 5000 and 141 against 141.7 on the Stream Ultra linked to it. Contributed by @dns13, whose diagnostics download of an AC 5000 linked with a Stream Ultra carried the field on both units. (Ref #536)
 
+- A STREAM AC 5000 gains Home From Solar, the house load covered by solar from its own strings or from a linked Stream. It is created once solar first feeds the house, so a unit without PV in its group never gets it. Mapped from a diagnostics download of an AC 5000 linked with a Stream Ultra that carries the PV, where it matches the whole house load in daylight and reads 0 W at night.
+
 ### Fixed
 
 - An Enhanced Mode entry no longer asks for a new sign-in when Home Assistant starts without internet, for example after a power cut while the router is still booting. A sign-in or credential request that gets no answer at all (DNS failure, refused connection, timeout) is now retried by Home Assistant until the connection is back, and only a refusal from the EcoFlow servers asks for re-authentication. Before, the entry stayed without data after the network returned. The warning for a failed sign-in also names the error type, so a timeout no longer shows an empty reason. Reported by @jrbeir, whose power-cut test log showed it. (Ref #531, Ref #464)
@@ -75,6 +77,8 @@ All notable changes to this project will be documented in this file.
 - The vehicle name on the per-vehicle completed charging totals of a PowerPulse 2 now follows the newest completed charge by time, even when EcoFlow returns end times with different offsets or in different formats. Before, the records were ordered by their text, so a charge ending later could lose the name to an earlier one. Energy totals are unchanged.
 
 - Pressing Wallbox Start Charging on a PowerPulse 2 in Solar mode without enough solar surplus no longer ends in an error. The wallbox accepts the start and reports Paused by Charger until the surplus is there. The integration dropped that report and kept showing the previous status, so the press failed after 30 s although charging started by itself later. The press now returns once the wallbox reports `charging` or Paused by Charger, Wallbox Charging Status shows the paused state, and a press that gets neither within 30 s still fails. While the wallbox is paused by the charger, pressing Wallbox Start Charging or Wallbox Stop Charging is refused with a message naming that status, because they act on `finishing` and `charging` only. Reported by @Xygen with a timeline of the press and a diagnostics download. (Ref #515)
+
+- Grid Export Power on a STREAM AC 5000 with solar strings now includes the solar its own strings feed into the grid. Before, it counted only what the battery and third-party solar fed in, so it read too low whenever the unit's own solar went out to the grid: 20 W instead of 0 W on an AC 5000 linked with a Stream Ultra that carries the PV. Together with the battery's share it closes the device's own grid total.
 
 ### Changed
 

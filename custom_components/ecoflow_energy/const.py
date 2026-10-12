@@ -4876,6 +4876,20 @@ STREAMAC5000_SENSORS: list[EcoFlowSensorDef] = [
         suggested_display_precision=0,
         disabled_by_default=True,
     ),
+    # Solar to home, from the MPPT edge `f12.1`. The parser zero-fills it on
+    # every unit, so the entity waits for a non-zero reading: a unit without
+    # PV in its group never gets it.
+    EcoFlowSensorDef(
+        "home_from_solar_w",
+        "Home From Solar",
+        "W",
+        "power",
+        "measurement",
+        "mdi:home-lightning-bolt-outline",
+        suggested_display_precision=0,
+        accessory=True,
+        accessory_needs_nonzero=True,
+    ),
     # Solar is accessory-gated rather than listed per prefix: whether a unit
     # has PV on the EcoFlow itself is a wiring choice, not a model difference.
     #
