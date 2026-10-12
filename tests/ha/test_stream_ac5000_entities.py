@@ -299,7 +299,8 @@ class TestStreamAC5000TaskReadback:
 class TestStreamAC5000Definitions:
     def test_documented_totals(self) -> None:
         """The counts the README and the entity reference publish."""
-        assert len(STREAMAC5000_SENSORS) == 57
+        # 58 since Battery Cycles (`32/50` field 14) joined the list.
+        assert len(STREAMAC5000_SENSORS) == 58
         assert len(STREAMAC5000_POWER_TO_ENERGY) == 5
 
     def test_the_pv_strings_wait_for_a_non_zero_reading(self) -> None:
@@ -470,8 +471,8 @@ class TestBKSeriesSetIsUntouched:
         # 55 since Unit Battery SOC joined the BK list (#323): a key the
         # BK series itself reports, not an ES22 one. 59 since the voltage and
         # current of strings 3 and 4 joined it (#522), keys of the same BK
-        # series.
-        assert len(_get_sensor_defs(DEVICE_TYPE_STREAM)) == 59
+        # series. 60 since Battery Cycles, the BK series' own BMS heartbeat.
+        assert len(_get_sensor_defs(DEVICE_TYPE_STREAM)) == 60
 
     def test_bk01_still_gets_the_micro_reduced_set(self) -> None:
         defs = _get_sensor_defs(DEVICE_TYPE_STREAM)
