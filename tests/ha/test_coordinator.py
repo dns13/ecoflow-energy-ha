@@ -8928,6 +8928,39 @@ class TestLinkedUnitPower:
         assert stream.data["pv1_w"] == 120.0
         assert "units_handed_over" not in coordinator._unit_power_stats
 
+    async def test_ac_grid_connection_power_stays_on_its_own_connection(
+        self, hass: HomeAssistant, enhanced_config_entry: MockConfigEntry
+    ) -> None:
+        """A Stream's AC Grid Connection Power is its own reading.
+
+        The AC 5000's `f50.1.7` for that Stream must not take turns with it,
+        so a handed entry drops the key; the own entry keeps it.
+        """
+        coordinator = self._coordinator(hass, enhanced_config_entry)
+        stream = EcoFlowDeviceCoordinator(
+            hass,
+            enhanced_config_entry,
+            {**MOCK_STREAM_DEVICE, "sn": "BK11TESTUNITBBBB"},
+        )
+        hass.data.setdefault(DOMAIN, {})[enhanced_config_entry.entry_id] = {
+            coordinator.device_sn: coordinator,
+            stream.device_sn: stream,
+        }
+        coordinator._apply_data(
+            {
+                "_unit_pv_by_sn": {
+                    "ES22TESTUNITAAAA": {"ac_grid_connection_power_w": -352.0},
+                    "BK11TESTUNITBBBB": {
+                        "pv1_w": 187.0,
+                        "ac_grid_connection_power_w": 153.0,
+                    },
+                },
+            }
+        )
+        assert coordinator.data["ac_grid_connection_power_w"] == -352.0
+        assert stream.data["pv1_w"] == 187.0
+        assert "ac_grid_connection_power_w" not in stream.data
+
     # --- the PV block, the same rule (#401) ---
 
     OWN_STRINGS = {

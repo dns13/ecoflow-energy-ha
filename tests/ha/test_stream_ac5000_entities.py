@@ -301,8 +301,9 @@ class TestStreamAC5000Definitions:
         """The counts the README and the entity reference publish."""
         # 58 since Battery Cycles (`32/50` field 14) joined the list, 59
         # since Home From Solar (`f12.1`), 63 since Unit Battery Power got its
-        # charge/discharge split and the two kWh counters integrating it.
-        assert len(STREAMAC5000_SENSORS) == 63
+        # charge/discharge split and the two kWh counters integrating it, 64
+        # since AC Grid Connection Power (`f50.1.7`).
+        assert len(STREAMAC5000_SENSORS) == 64
         assert len(STREAMAC5000_POWER_TO_ENERGY) == 7
 
     def test_the_pv_strings_wait_for_a_non_zero_reading(self) -> None:

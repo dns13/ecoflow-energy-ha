@@ -235,13 +235,27 @@ _ES22_FIELD_MAP: dict[tuple[int, int], dict[str, tuple[str, str, float]]] = {
         # (issue #401, two entries in every full frame, each with its own
         # `.1`), so the block is read per entry and the coordinator keeps the
         # entry stamped with its own serial, exactly as it does for `f54`.
-        # `.2`, `.4`, `.5`, `.6` and `.7` are unmapped. `.4` is worth a
+        # `.2`, `.4`, `.5`, `.6` and `.8` are unmapped. `.4` is worth a
         # note: it equals `.3` minus `.7` in all 6 frames that carry it,
         # including the 00:27 night frame where it reads 1999 against `.7`
         # = -1999 with `.3` absent. That is the arithmetic saying an absent
         # `.3` is zero rather than unknown, which is what
-        # `_PV_ZERO_FILL_PATHS` below acts on. The meaning of `.7` is still
-        # open.
+        # `_PV_ZERO_FILL_PATHS` below acts on.
+        #
+        # `.7` is the unit's AC power at its grid connection, positive out of
+        # the unit, negative into it, the sign the Stream's AC Grid
+        # Connection Power has. The same identity holds in every entry of the
+        # ten captures that carry it, ES21 and ES22: battery `.4` = solar
+        # `.3` - `.7` (- `.8`, the AC socket, where one is loaded).
+        # Discharging into the house it reads +535.2 against `.4` = -535.2;
+        # charging from the grid -599.6 against +599.6; a Stream Ultra feeding
+        # 153 W of its 187 W solar out with 34 W into its pack reads 153; with
+        # 352 W on the socket passed through from the grid it reads -352 and
+        # `.8` 353. `.6` tracks it within a few watts while the inverter runs
+        # but is absent in that pass-through, so `.7` is the one mapped. An
+        # entry without it is a unit at rest: see `_decode_pv_entry`. Only the
+        # unit's own entry publishes it: see `_claim_pv_entry`.
+        "50.1.7": ("ac_grid_connection_power_w", _TYPE_FLOAT, 1),
         #
         # `f11.3` is the same MPPT total in half-watts (203 / 173 / 34 / 28 /
         # 308 against 195.91 / 174.48 / 34.24 / 28.52 / 310.96 in the same
@@ -833,6 +847,11 @@ def _decode_pv_entry(block: bytes) -> tuple[str | None, dict[str, Any]]:
             continue
         for key, zero in defaults:
             entry.setdefault(key, zero)
+    # The AC power is filled on its own rather than with the strings above,
+    # whose fill is checked against their total. An entry without `.7` is a
+    # unit moving nothing through its grid connection (the `{.5}`-only idle
+    # entries on file), so it reads 0 W.
+    entry.setdefault("ac_grid_connection_power_w", 0.0)
     return serial, entry
 
 

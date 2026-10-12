@@ -8,7 +8,7 @@ Full list of all entities created for the STREAM AC 5000.
 
 **This is not the Stream entity set.** Despite the shared product name, an `ES22` speaks a different protocol from the BK-series Stream devices: it sends none of their telemetry messages and describes power as a flow matrix rather than as individual readings. It therefore has its own device type, parser and entity list. See [Stream](stream.md) for the BK series.
 
-**Totals:** 63 sensors, 2 binary sensors, 2 switches, 7 numbers, 1 select
+**Totals:** 64 sensors, 2 binary sensors, 2 switches, 7 numbers, 1 select
 
 > Entities marked with *disabled* are available but hidden by default. Enable them in **Settings > Devices > EcoFlow STREAM AC 5000 > Entities** (click the filter icon and show disabled entities).
 
@@ -43,6 +43,7 @@ Full list of all entities created for the STREAM AC 5000.
 | Grid Power | W | - | enabled | Signed grid power from the linked smart meter (positive = drawing, negative = feeding in). Absent while no meter is linked in the EcoFlow app |
 | Grid Import Power | W | - | enabled | Power drawn from the grid, derived from the flow matrix. It counts what the house, the battery and the AC socket draw, so a load on the socket is included |
 | AC Output Power | W | - | *accessory* | Power at the AC socket. Created once a load has drawn power from the socket, and it reads 0 W when the load is unplugged |
+| AC Grid Connection Power | W | - | enabled | This unit's own power at its AC grid connection, negative = into the unit (charging from the grid, or the AC socket passing grid power through), positive = out of it (discharging or solar feeding the house or the grid). The same reading and sign as on the [Stream](stream.md). Not the AC socket, which is AC Output Power. It comes from a block the device does not send while the unit is idle, so it can keep its last reading for a while after the unit goes idle |
 | Grid Export Power | W | - | enabled | Power fed into the grid, derived from the flow matrix. It counts what the battery, the PV strings of this unit or of a linked Stream, and third-party solar feed in |
 | Home From Battery | W | diagnostic | disabled | House load covered by the battery |
 | Home From Grid | W | diagnostic | disabled | House load covered by the grid |

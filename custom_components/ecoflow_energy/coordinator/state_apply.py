@@ -156,9 +156,16 @@ class StateApplyMixin(_Base):
         with his serial on one connection and, at the restart, the other
         entry on the other (#401, 2026-09-13). Only a frame that carries both
         is recorded, so the pair is never stitched from two moments.
+
+        AC Grid Connection Power (`f50.1.7`) is published only from the
+        unit's own connection. A handed entry drops it: on a linked Stream
+        the key is that unit's own grid connection reading, from its own
+        connection, and the two must not take turns.
         """
         strings = dict(entry)
         soc = strings.pop(UNIT_PV_ENTRY_SOC_KEY, None)
+        if not own_connection:
+            strings.pop("ac_grid_connection_power_w", None)
         own = parsed.get("soc_precise_pct")
         if own_connection and soc is not None and own is not None:
             stats["own_pv_entry_soc_pct"] = soc
