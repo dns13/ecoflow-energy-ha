@@ -12,6 +12,7 @@ from ..const import (
     APP_SURPLUS_SYNC_MIN_INTERVAL_S,
     APP_SURPLUS_SYNC_USER_GRACE_S,
     DEVICE_TYPE_POWEROCEAN,
+    DEVICE_TYPE_STREAM_AC5000,
     DEVICE_TYPE_WAVE3,
     DOMAIN,
     POWEROCEAN_SCHEDULE_ARMED_LATCH_S,
@@ -193,6 +194,12 @@ class StateApplyMixin(_Base):
         `*_listed` / `own_*_matched` describe only the last own-connection
         block, unchanged from before. The eight hand-over counters
         (`linked_unit_stats`) are running totals.
+
+        A battery entry of None is one the message could not sign (see
+        `_sign_unit_entries`): the unit's last reading stands and nothing is
+        handed over. The battery block goes only to another STREAM AC 5000.
+        A linked Stream keeps its battery power from its own battery
+        management, so one pack never has two readings.
         """
         power = parsed.pop(UNIT_POWER_BY_SN_KEY, None)
         strings = parsed.pop(UNIT_PV_BY_SN_KEY, None)
@@ -203,12 +210,18 @@ class StateApplyMixin(_Base):
             own = power.get(self.device_sn)
             if own_connection:
                 stats["units_listed"] = len(power)
-                stats["own_unit_matched"] = own is not None
+                stats["own_unit_matched"] = self.device_sn in power
                 if own is not None:
                     parsed["unit_batt_w"] = own
                     self._own_unit_entry_ts[UNIT_POWER_BY_SN_KEY] = now
                 for serial, value in power.items():
-                    if serial == self.device_sn:
+                    if serial == self.device_sn or value is None:
+                        continue
+                    sibling = self._linked_unit_coordinator(serial)
+                    if (
+                        sibling is not None
+                        and sibling.device_type != DEVICE_TYPE_STREAM_AC5000
+                    ):
                         continue
                     stats["units_handed_over"] = stats.get("units_handed_over", 0) + 1
                     handoffs.setdefault(serial, {})[UNIT_POWER_BY_SN_KEY] = {
@@ -221,6 +234,15 @@ class StateApplyMixin(_Base):
                     stats["units_received"] = stats.get("units_received", 0) + 1
                 else:
                     stats["units_held"] = stats.get("units_held", 0) + 1
+
+        # The parser signs the entry (positive is charge), so the split is the
+        # same one the system battery power gets.
+        unit_w = parsed.get("unit_batt_w")
+        if isinstance(unit_w, (int, float)):
+            parsed["unit_batt_charge_power_w"] = float(unit_w) if unit_w > 0 else 0.0
+            parsed["unit_batt_discharge_power_w"] = (
+                -float(unit_w) if unit_w < 0 else 0.0
+            )
 
         if isinstance(strings, dict) and strings:
             own_strings = strings.get(self.device_sn)

@@ -965,7 +965,8 @@ class TestLinkedUnitBlock:
             _unit_entry(b"ES22TESTUNITAAAA", soc=87, half_watts=0)
             + _unit_entry(b"ES22TESTUNITBBBB", soc=65, half_watts=1378),
         )
-        result = parse_stream_ac5000_message(_build_frame(254, 39, bytes(block)))
+        payload = bytes(_edges(from_grid=689.0)) + bytes(block)
+        result = parse_stream_ac5000_message(_build_frame(254, 39, payload))
         assert result is not None
         assert result["_unit_batt_w_by_sn"] == {
             "ES22TESTUNITAAAA": 0.0,
@@ -973,10 +974,72 @@ class TestLinkedUnitBlock:
         }
 
     def test_single_unit_installation_reports_one_entry(self) -> None:
+        """Charging from the grid: the only moving unit takes the system sign."""
+        block = _sub(54, _unit_entry(b"ES22TESTUNITAAAA", soc=76, half_watts=1356))
+        payload = bytes(_edges(from_grid=678.0)) + bytes(block)
+        result = parse_stream_ac5000_message(_build_frame(254, 39, payload))
+        assert result is not None
+        assert result["_unit_batt_w_by_sn"] == {"ES22TESTUNITAAAA": 678.0}
+
+    def test_discharge_takes_the_sign_of_the_system_flow(self) -> None:
+        """`f54.1.4` is a magnitude; 14 half-watts out of the pack is -7 W."""
+        block = _sub(54, _unit_entry(b"ES22TESTUNITAAAA", soc=22, half_watts=14))
+        payload = bytes(_edges(to_home=7.0)) + bytes(block)
+        result = parse_stream_ac5000_message(_build_frame(254, 39, payload))
+        assert result is not None
+        assert result["_unit_batt_w_by_sn"] == {"ES22TESTUNITAAAA": -7.0}
+
+    def test_without_a_system_flow_in_the_message_the_entry_is_unproven(self) -> None:
+        """The sign comes from the same message or not at all."""
         block = _sub(54, _unit_entry(b"ES22TESTUNITAAAA", soc=76, half_watts=1356))
         result = parse_stream_ac5000_message(_build_frame(254, 39, bytes(block)))
         assert result is not None
-        assert result["_unit_batt_w_by_sn"] == {"ES22TESTUNITAAAA": 678.0}
+        assert result["_unit_batt_w_by_sn"] == {"ES22TESTUNITAAAA": None}
+
+    def test_the_units_own_f50_sign_wins_over_the_system(self) -> None:
+        """Two units can flow opposite ways; `f50.1.4` is the per-unit sign.
+
+        The unit without one is unproven by this message.
+        """
+        f50 = _sub(
+            50,
+            _sub(
+                1,
+                encode_field_bytes(1, b"ES22TESTUNITBBBB")
+                + _encode_fixed32_field(4, -12.0),
+            ),
+        )
+        block = _sub(
+            54,
+            _unit_entry(b"ES22TESTUNITAAAA", soc=50, half_watts=200)
+            + _unit_entry(b"ES22TESTUNITBBBB", soc=40, half_watts=24),
+        )
+        payload = bytes(_edges(from_grid=88.0)) + bytes(f50) + bytes(block)
+        result = parse_stream_ac5000_message(_build_frame(254, 39, payload))
+        assert result is not None
+        assert result["_unit_batt_w_by_sn"] == {
+            "ES22TESTUNITAAAA": None,
+            "ES22TESTUNITBBBB": -12.0,
+        }
+
+    def test_two_active_units_without_f50_are_unproven(self) -> None:
+        """A push while 300 W move from the AC 5000 into the Ultra.
+
+        The system reads -12 W; no sign of either unit follows from it. Both
+        the system sign and a fit to the system sum flipped them.
+        """
+        block = _sub(
+            54,
+            _unit_entry(b"ES22TESTUNITAAAA", soc=50, half_watts=600)
+            + _unit_entry(b"BK11TESTUNITBBBB", soc=40, half_watts=580),
+        )
+        payload = bytes(_edges(to_home=12.0)) + bytes(block)
+        result = parse_stream_ac5000_message(_build_frame(254, 39, payload))
+        assert result is not None
+        assert result["_unit_batt_w_by_sn"] == {
+            "ES22TESTUNITAAAA": None,
+            "BK11TESTUNITBBBB": None,
+        }
 
     def test_entry_without_a_power_value_is_not_reported(self) -> None:
         """An absent field means unchanged here, so it must not read as zero."""
@@ -2008,3 +2071,12 @@ class TestUltraPvPair:
         assert frames["08:42:58"]["grid_export_power_w"] == 20.0
         # `.3` = 5 plus battery to grid `.5` = 2, against `f11.2` = 13.
         assert frames["08:55:05"]["grid_export_power_w"] == 7.0
+
+    def test_each_unit_gets_its_own_signed_battery_power(self) -> None:
+        frames = _ultra_pair_frames()
+        es22, ultra = "ES22TESTUNITAAAA", "BK11TESTUNITBBBB"
+        assert frames["08:55:08"]["_unit_batt_w_by_sn"] == {es22: 0.0, ultra: 12.0}
+        assert frames["08:55:05"]["_unit_batt_w_by_sn"] == {es22: 0.0, ultra: -1.5}
+        # No `f50` in this push, but the ES22 reads 0: the Ultra is the whole
+        # system, where the battery feeds 15 W of the house.
+        assert frames["08:57:03"]["_unit_batt_w_by_sn"] == {es22: 0.0, ultra: -17.5}
