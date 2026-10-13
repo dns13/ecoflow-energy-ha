@@ -56,7 +56,14 @@ from .ecoflow.parsers.hr61_proto import (
 from .ecoflow.parsers.ocean2_proto import (
     MAX_MODULES as OCEAN2_MAX_MODULES,  # noqa: E402
 )
-from .ecoflow.parsers.powerocean import PARALLEL_UNIT_MAX  # noqa: E402
+from .ecoflow.parsers.ocean2_proto import (  # noqa: E402
+    OCEAN2_CONTROL_MODES,
+    OCEAN2_WORK_MODES,
+)
+from .ecoflow.parsers.powerocean import (  # noqa: E402
+    EMS_WORK_STATES,
+    PARALLEL_UNIT_MAX,
+)
 from .ecoflow.parsers.powerocean_proto import SCHEDULE_MAX_INDEX  # noqa: E402
 from .ecoflow.parsers.smart_home_panel_2_proto import (
     CIRCUIT_COUNT as SMARTHOMEPANEL2_CIRCUIT_COUNT,  # noqa: E402
@@ -7731,6 +7738,49 @@ WAVE3_SELECTS: list[EcoFlowSelectDef] = [
 # as its MPPT inputs are wired, and an entity that never fills reads as a
 # broken sensor rather than an unused input.
 OCEAN2_SENSORS: list[EcoFlowSensorDef] = [
+    # The EMS status record (254/39 field 3): what the app shows as the work
+    # mode, what the system is doing, and which program overrides the mode.
+    # It rides mostly on the full snapshot, so these are accessories and
+    # appear on the first report. The options come from the parser's tables,
+    # which are the only place the wire values are named. Work mode and system
+    # state share their keys, state names and translations with the
+    # PowerOcean's sensors of the same name.
+    EcoFlowSensorDef(
+        "ems_work_mode",
+        "Work Mode",
+        None,
+        "enum",
+        None,
+        "mdi:cog",
+        "diagnostic",
+        enhanced_only=True,
+        options=list(OCEAN2_WORK_MODES.values()),
+        accessory=True,
+    ),
+    EcoFlowSensorDef(
+        "ems_work_state",
+        "System State",
+        None,
+        "enum",
+        None,
+        "mdi:state-machine",
+        "diagnostic",
+        enhanced_only=True,
+        options=list(EMS_WORK_STATES.values()),
+        accessory=True,
+    ),
+    EcoFlowSensorDef(
+        "ems_control_mode",
+        "Control Mode",
+        None,
+        "enum",
+        None,
+        "mdi:tune-variant",
+        "diagnostic",
+        enhanced_only=True,
+        options=list(OCEAN2_CONTROL_MODES.values()),
+        accessory=True,
+    ),
     EcoFlowSensorDef(
         "soc_pct",
         "Battery SOC",

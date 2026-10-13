@@ -585,6 +585,23 @@
       "backup_reserve_pct": {
         "name": "Backup Reserve"
       },
+      "ems_control_mode": {
+        "name": "Control Mode",
+        "state": {
+          "none": "None",
+          "soc_calibration": "SoC Calibration",
+          "storm_guard": "Storm Guard",
+          "eco": "Eco",
+          "task": "Task",
+          "schedule": "Schedule",
+          "ac_backup": "AC Backup",
+          "grid_operator": "Grid Operator",
+          "remote": "Remote",
+          "standby": "Standby",
+          "frequency_response": "Frequency Response",
+          "third_party": "Third Party"
+        }
+      },
       "max_charge_soc_pct": {
         "name": "Max Charge SoC"
       },

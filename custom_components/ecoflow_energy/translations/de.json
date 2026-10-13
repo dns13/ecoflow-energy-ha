@@ -585,6 +585,23 @@
       "backup_reserve_pct": {
         "name": "Backup-Reserve"
       },
+      "ems_control_mode": {
+        "name": "Steuerungsmodus",
+        "state": {
+          "none": "Keiner",
+          "soc_calibration": "SoC-Kalibrierung",
+          "storm_guard": "Sturmwächter",
+          "eco": "Eco",
+          "task": "Aufgabe",
+          "schedule": "Zeitplan",
+          "ac_backup": "AC-Backup",
+          "grid_operator": "Netzbetreiber",
+          "remote": "Fernsteuerung",
+          "standby": "Standby",
+          "frequency_response": "Frequenzregelung",
+          "third_party": "Drittanbieter"
+        }
+      },
       "max_charge_soc_pct": {
         "name": "Max. Lade-SoC"
       },

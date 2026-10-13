@@ -44,6 +44,7 @@ from math import isfinite
 from typing import Any
 
 from ..proto.decoder import decode_header_message
+from .powerocean import EMS_WORK_STATES
 from .stream_ac5000_proto import (
     _TYPE_FLOAT,
     _TYPE_INT,
@@ -97,7 +98,55 @@ _OCEAN2_FIELD_MAP: dict[str, tuple[str, str, float]] = {
     # means "no update", never zero. Both arrive as an explicit 0 when zero.
     "10": ("backup_reserve_pct", _TYPE_INT, 1),
     "92": ("edev_soc_ratio_pct", _TYPE_INT, 1),
+    # Field 3 is the EMS status record. It rides mostly on the full get_reply
+    # upload (one property frame in the 2026-09-19 RE11 recording carries it
+    # too), so an absent key means "no update". Three of its varints are read,
+    # as wire numbers here and as state names in `_parse_telemetry`.
+    "3.2": ("_ems_work_mode", _TYPE_INT, 1),
+    "3.3": ("_ems_work_state", _TYPE_INT, 1),
+    "3.10": ("_ems_control_mode", _TYPE_INT, 1),
 }
+
+#: Wire value -> state name for 3.2, the work mode the app shows. The wire
+#: numbering is this device's own (the PowerOcean sends 0 and 12 for the same
+#: two modes), so the table stays here, but the names are the PowerOcean
+#: `ems_work_mode` states and share its translations. 0 is not a mode and is
+#: left out, like any value this table does not name.
+OCEAN2_WORK_MODES: dict[int, str] = {
+    1: "self_use",
+    2: "ai_schedule",
+}
+
+# 3.3, what the system is doing right now, uses `EMS_WORK_STATES` from the
+# PowerOcean parser as it is: same wire values, same meaning, one table.
+
+#: Wire value -> state name for 3.10, which program is overriding the plain
+#: work mode. 0 is a real value: "none" means no override is active, and the
+#: device sends it as an explicit zero.
+OCEAN2_CONTROL_MODES: dict[int, str] = {
+    0: "none",
+    1: "soc_calibration",
+    2: "storm_guard",
+    3: "eco",
+    4: "task",
+    5: "schedule",
+    6: "ac_backup",
+    7: "grid_operator",
+    8: "remote",
+    9: "standby",
+    10: "frequency_response",
+    11: "third_party",
+}
+
+#: Temporary walker key -> (sensor key, wire table). `ems_work_mode` and
+#: `ems_work_state` are the PowerOcean's sensor keys too: the state names are
+#: the same, so the translations are shared. `ems_control_mode` is this
+#: device's alone.
+_EMS_STATES: tuple[tuple[str, str, dict[int, str]], ...] = (
+    ("_ems_work_mode", "ems_work_mode", OCEAN2_WORK_MODES),
+    ("_ems_work_state", "ems_work_state", EMS_WORK_STATES),
+    ("_ems_control_mode", "ems_control_mode", OCEAN2_CONTROL_MODES),
+)
 _OCEAN2_TREE: dict[int, Any] = _compile(_OCEAN2_FIELD_MAP)
 # `_walk` only consults `repeated` for a path whose tree node is a dict, so
 # each repeated group below needs a (content-free) dict node here purely to
@@ -426,6 +475,13 @@ def _parse_telemetry(pdata: bytes) -> dict[str, Any]:
     edev_soc_ratio = walked.get("edev_soc_ratio_pct")
     if edev_soc_ratio is not None:
         out["edev_soc_ratio_pct"] = edev_soc_ratio
+    # The three EMS states: a wire value this device has not shown us is
+    # dropped rather than guessed (the sensor would reject an unknown option
+    # anyway), and 0 stays a candidate - for 3.10 and 3.3 it is the real "none".
+    for walker_key, sensor_key, table in _EMS_STATES:
+        wire = walked.get(walker_key)
+        if wire is not None and wire in table:
+            out[sensor_key] = table[wire]
     remaining = walked.get("batt_remaining_wh")
     if remaining is not None:
         out["batt_remaining_wh"] = remaining
