@@ -1920,10 +1920,10 @@ class TestAcSocketOnBattery:
 
 
 @pytest.mark.parametrize(
-    "path",
-    [GET_REPLY, ES21_PV, ES21_PAIR_BOTH, SOCKET_BATTERY_458],
+    ("path", "frames"),
+    [(GET_REPLY, 1), (ES21_PV, 9), (ES21_PAIR_BOTH, 14), (SOCKET_BATTERY_458, 30)],
 )
-def test_cycles_follow_the_lifetime_counters(path: Path) -> None:
+def test_cycles_follow_the_lifetime_counters(path: Path, frames: int) -> None:
     """`32/50` field 14 is the BMS cycle count (`cycles`, as on the Delta 3).
 
     Each reading sits within one cycle of the lifetime throughput (`50`
@@ -1967,4 +1967,5 @@ def test_cycles_follow_the_lifetime_counters(path: Path) -> None:
             throughput = min(raw[50], raw[51]) / raw[13]
             assert abs(throughput - raw[14]) < 1, raw
             checked += 1
-    assert checked
+    # Pinned per recording, so a walker that stops early fails here.
+    assert checked == frames

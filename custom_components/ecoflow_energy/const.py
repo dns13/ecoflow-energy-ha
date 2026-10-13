@@ -4734,7 +4734,9 @@ STREAMAC5000_SENSORS: list[EcoFlowSensorDef] = [
         "mdi:battery-heart-variant",
         suggested_display_precision=0,
     ),
-    # From the BMS heartbeat (`32/50` field 14), as on the Stream.
+    # From the BMS heartbeat (`32/50` field 14), as on the Stream. No
+    # `enhanced_only`: the AC 5000 is Enhanced-only anyway, like Battery SoH
+    # from the same heartbeat.
     EcoFlowSensorDef(
         "bms_cycles",
         "Battery Cycles",
@@ -4742,7 +4744,6 @@ STREAMAC5000_SENSORS: list[EcoFlowSensorDef] = [
         None,
         "total_increasing",
         "mdi:counter",
-        enhanced_only=True,
         suggested_display_precision=0,
     ),
     # --- battery power ---
