@@ -2149,9 +2149,19 @@ def _f50_entries(path: Path) -> list[dict[int, float]]:
 
 
 @pytest.mark.parametrize(
-    "path", [GET_REPLY, PUSHES, ES21_PV, ES21_PAIR, ES21_PAIR_BOTH, SOCKET_458]
+    ("path", "entries"),
+    [
+        (GET_REPLY, 1),
+        (PUSHES, 12),
+        (ES21_PV, 6),
+        (ES21_PAIR, 6),
+        (ES21_PAIR_BOTH, 29),
+        (SOCKET_458, 5),
+        (ULTRA_PAIR, 4),
+        (SOCKET_BATTERY_458, 26),
+    ],
 )
-def test_ac_power_closes_the_unit_balance(path: Path) -> None:
+def test_ac_power_closes_the_unit_balance(path: Path, entries: int) -> None:
     """`.4` (battery) = `.3` (solar) - `.7` (AC power) - `.8` (socket).
 
     What makes `.7` this unit's AC power with output positive rather than a
@@ -2163,6 +2173,7 @@ def test_ac_power_closes_the_unit_balance(path: Path) -> None:
         if 7 not in entry:
             continue
         expected = entry.get(3, 0.0) - entry[7] - entry.get(8, 0.0)
-        assert entry.get(4, 0.0) == pytest.approx(expected, abs=1.5), entry
+        assert entry.get(4, 0.0) == pytest.approx(expected, abs=0.5), entry
         checked += 1
-    assert checked
+    # Pinned per recording, so a walker that stops early fails here.
+    assert checked == entries

@@ -8928,13 +8928,13 @@ class TestLinkedUnitPower:
         assert stream.data["pv1_w"] == 120.0
         assert "units_handed_over" not in coordinator._unit_power_stats
 
-    async def test_ac_grid_connection_power_stays_on_its_own_connection(
+    async def test_a_linked_stream_drops_the_handed_ac_grid_connection_power(
         self, hass: HomeAssistant, enhanced_config_entry: MockConfigEntry
     ) -> None:
         """A Stream's AC Grid Connection Power is its own reading.
 
         The AC 5000's `f50.1.7` for that Stream must not take turns with it,
-        so a handed entry drops the key; the own entry keeps it.
+        so the Stream drops the handed key; the own entry keeps it.
         """
         coordinator = self._coordinator(hass, enhanced_config_entry)
         stream = EcoFlowDeviceCoordinator(
@@ -8960,6 +8960,33 @@ class TestLinkedUnitPower:
         assert coordinator.data["ac_grid_connection_power_w"] == -352.0
         assert stream.data["pv1_w"] == 187.0
         assert "ac_grid_connection_power_w" not in stream.data
+
+    async def test_a_second_ac5000_keeps_the_handed_ac_grid_connection_power(
+        self, hass: HomeAssistant, enhanced_config_entry: MockConfigEntry
+    ) -> None:
+        """Its own entry may reach it only over its sibling's connection."""
+        coordinator = self._coordinator(hass, enhanced_config_entry)
+        sibling = EcoFlowDeviceCoordinator(
+            hass, enhanced_config_entry, {**self.ES22_DEVICE, "sn": "ES22TESTUNITBBBB"}
+        )
+        hass.data.setdefault(DOMAIN, {})[enhanced_config_entry.entry_id] = {
+            coordinator.device_sn: coordinator,
+            sibling.device_sn: sibling,
+        }
+        coordinator._apply_data(
+            {
+                "_unit_pv_by_sn": {
+                    "ES22TESTUNITAAAA": {"ac_grid_connection_power_w": -352.0},
+                    "ES22TESTUNITBBBB": {
+                        "pv1_w": 187.0,
+                        "ac_grid_connection_power_w": 153.0,
+                    },
+                },
+            }
+        )
+        assert coordinator.data["ac_grid_connection_power_w"] == -352.0
+        assert sibling.data["pv1_w"] == 187.0
+        assert sibling.data["ac_grid_connection_power_w"] == 153.0
 
     # --- the PV block, the same rule (#401) ---
 
