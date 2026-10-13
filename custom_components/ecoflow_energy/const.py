@@ -4950,6 +4950,18 @@ STREAMAC5000_SENSORS: list[EcoFlowSensorDef] = [
         accessory=True,
         accessory_needs_nonzero=True,
     ),
+    # This unit's own power at its AC grid connection, from its `f50.1.7`
+    # entry: positive out of the unit, negative into it, as on the Stream.
+    # Not the AC socket, which is AC Output Power above.
+    EcoFlowSensorDef(
+        "ac_grid_connection_power_w",
+        "AC Grid Connection Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:transmission-tower",
+        suggested_display_precision=0,
+    ),
     EcoFlowSensorDef(
         "grid_export_power_w",
         "Grid Export Power",
