@@ -351,6 +351,13 @@ _ES22_FIELD_MAP: dict[tuple[int, int], dict[str, tuple[str, str, float]]] = {
         "11": ("batt_design_cap_mah", _TYPE_INT, 1),
         "12": ("batt_remain_cap_mah", _TYPE_INT, 1),
         "13": ("batt_full_cap_mah", _TYPE_INT, 1),
+        # Charge cycles, the `cycles` field of the BMS heartbeat the Delta 3
+        # reads from the same message. It agrees with the lifetime charge
+        # counter `50` over the full capacity `13`: 1,472,930 / 314,000 mAh =
+        # 4.7 against 4 on an ES22, 14,166,121 / 100,000 = 141.7 against 141
+        # on the Stream Ultra beside it. Unlike `f38.1.3`/`f44.2` above it
+        # holds still within a capture.
+        "14": ("bms_cycles", _TYPE_INT, 1),
         "15": ("bms_soh_pct", _TYPE_INT, 1),
         "16": ("batt_max_cell_vol_mv", _TYPE_INT, 1),
         "17": ("batt_min_cell_vol_mv", _TYPE_INT, 1),

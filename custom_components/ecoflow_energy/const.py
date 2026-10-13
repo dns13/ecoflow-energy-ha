@@ -4536,6 +4536,18 @@ STREAM_SENSORS: list[EcoFlowSensorDef] = [
         "mdi:battery-heart-variant",
         suggested_display_precision=0,
     ),
+    # From the BMS heartbeat (`32/50` field 14), which only the real-time
+    # connection carries; the Developer API quota has no cycle count.
+    EcoFlowSensorDef(
+        "bms_cycles",
+        "Battery Cycles",
+        None,
+        None,
+        "total_increasing",
+        "mdi:counter",
+        enhanced_only=True,
+        suggested_display_precision=0,
+    ),
     EcoFlowSensorDef(
         "batt_voltage_v",
         "Battery Voltage",
@@ -4801,6 +4813,18 @@ STREAMAC5000_SENSORS: list[EcoFlowSensorDef] = [
         None,
         "measurement",
         "mdi:battery-heart-variant",
+        suggested_display_precision=0,
+    ),
+    # From the BMS heartbeat (`32/50` field 14), as on the Stream. No
+    # `enhanced_only`: the AC 5000 is Enhanced-only anyway, like Battery SoH
+    # from the same heartbeat.
+    EcoFlowSensorDef(
+        "bms_cycles",
+        "Battery Cycles",
+        None,
+        None,
+        "total_increasing",
+        "mdi:counter",
         suggested_display_precision=0,
     ),
     # --- battery power ---
@@ -5635,6 +5659,7 @@ STREAM_MICRO_EXCLUDED_KEYS: frozenset[str] = frozenset(
         "batt_min_cell_temp_c",
         "batt_max_mos_temp_c",
         "batt_charge_discharge_state",
+        "bms_cycles",
         # The SoC limits (fields 270/271) are parsed but have no Stream entity of
         # their own, so there is nothing to exclude for them here.
         # Backup reserve is a battery control: the read-only sensor and the

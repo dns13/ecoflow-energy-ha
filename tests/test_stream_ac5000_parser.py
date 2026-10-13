@@ -1917,3 +1917,55 @@ class TestAcSocketOnBattery:
             assert abs(result["batt_w"]) < 10
             checked += 1
         assert checked == 21
+
+
+@pytest.mark.parametrize(
+    ("path", "frames"),
+    [(GET_REPLY, 1), (ES21_PV, 9), (ES21_PAIR_BOTH, 14), (SOCKET_BATTERY_458, 30)],
+)
+def test_cycles_follow_the_lifetime_counters(path: Path, frames: int) -> None:
+    """`32/50` field 14 is the BMS cycle count (`cycles`, as on the Delta 3).
+
+    Each reading sits within one cycle of the lifetime throughput (`50`
+    charged, `51` discharged, the smaller of the two) over the full capacity
+    `13`, which is what a cycle count is.
+    """
+    from ecoflow_energy.ecoflow.parsers.stream_ac5000_proto import (
+        _decode_scalar,
+        _iter_fields,
+    )
+
+    hexes: list[str] = []
+
+    def find(node: object) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "hex" and isinstance(value, str):
+                    hexes.append(value)
+                else:
+                    find(value)
+        elif isinstance(node, list):
+            for item in node:
+                find(item)
+
+    find(json.loads(path.read_text(encoding="utf-8")))
+    checked = 0
+    for frame_hex in hexes:
+        for header in decode_header_message(bytes.fromhex(frame_hex))[0]:
+            if (header.get("cmd_func"), header.get("cmd_id")) != (32, 50):
+                continue
+            raw = {
+                n: _decode_scalar(w, value, "int")
+                for n, w, value in _iter_fields(bytes.fromhex(header["pdata"]))
+                if w == 0
+            }
+            parsed = parse_stream_ac5000_message(
+                _build_frame(32, 50, bytes.fromhex(header["pdata"]))
+            )
+            assert parsed is not None
+            assert parsed["bms_cycles"] == raw[14]
+            throughput = min(raw[50], raw[51]) / raw[13]
+            assert abs(throughput - raw[14]) < 1, raw
+            checked += 1
+    # Pinned per recording, so a walker that stops early fails here.
+    assert checked == frames
