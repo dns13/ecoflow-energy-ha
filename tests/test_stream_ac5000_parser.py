@@ -989,6 +989,25 @@ class TestLinkedUnitBlock:
         assert result is not None
         assert result["_unit_batt_w_by_sn"] == {"ES22TESTUNITAAAA": -7.0}
 
+    def test_the_only_moving_unit_need_not_own_the_connection(self) -> None:
+        """The neighbour moves alone, so the system flow signs its entry.
+
+        The frame comes from AAAA's connection and AAAA sits at 0 W: the
+        system is then BBBB alone, discharging 15 W into the house.
+        """
+        block = _sub(
+            54,
+            _unit_entry(b"ES22TESTUNITAAAA", soc=87, half_watts=0)
+            + _unit_entry(b"ES22TESTUNITBBBB", soc=65, half_watts=30),
+        )
+        payload = bytes(_edges(to_home=15.0)) + bytes(block)
+        result = parse_stream_ac5000_message(_build_frame(254, 39, payload))
+        assert result is not None
+        assert result["_unit_batt_w_by_sn"] == {
+            "ES22TESTUNITAAAA": 0.0,
+            "ES22TESTUNITBBBB": -15.0,
+        }
+
     def test_without_a_system_flow_in_the_message_the_entry_is_unproven(self) -> None:
         """The sign comes from the same message or not at all."""
         block = _sub(54, _unit_entry(b"ES22TESTUNITAAAA", soc=76, half_watts=1356))

@@ -8879,6 +8879,24 @@ class TestLinkedUnitPower:
         # The serial was listed, so this is not a serial mismatch.
         assert coordinator._unit_power_stats["own_unit_matched"] is True
 
+    async def test_an_unproven_entry_is_not_handed_to_a_sibling(
+        self, hass: HomeAssistant, enhanced_config_entry: MockConfigEntry
+    ) -> None:
+        """A second AC 5000 keeps its last reading, as its own frames would."""
+        coordinator = self._coordinator(hass, enhanced_config_entry)
+        sibling = EcoFlowDeviceCoordinator(
+            hass, enhanced_config_entry, {**self.ES22_DEVICE, "sn": "ES22TESTUNITBBBB"}
+        )
+        hass.data.setdefault(DOMAIN, {})[enhanced_config_entry.entry_id] = {
+            coordinator.device_sn: coordinator,
+            sibling.device_sn: sibling,
+        }
+        own, other = coordinator.device_sn, sibling.device_sn
+        coordinator._apply_data({"_unit_batt_w_by_sn": {own: 0.0, other: -300.0}})
+        coordinator._apply_data({"_unit_batt_w_by_sn": {own: 0.0, other: None}})
+        assert sibling.data["unit_batt_w"] == -300.0
+        assert coordinator._unit_power_stats["units_handed_over"] == 1
+
     async def test_a_linked_stream_never_gets_a_battery_entry(
         self, hass: HomeAssistant, enhanced_config_entry: MockConfigEntry
     ) -> None:
