@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import TYPE_CHECKING, Any, TypedDict
@@ -11,6 +12,7 @@ from homeassistant.helpers import device_registry as dr
 from ..const import (
     APP_SURPLUS_SYNC_MIN_INTERVAL_S,
     APP_SURPLUS_SYNC_USER_GRACE_S,
+    DEVICE_TYPE_OCEAN2,
     DEVICE_TYPE_POWEROCEAN,
     DEVICE_TYPE_STREAM_AC5000,
     DEVICE_TYPE_WAVE3,
@@ -409,8 +411,8 @@ class StateApplyMixin(_Base):
         ):
             del parsed["ev_charge_mode"]
 
-    def _resolve_wallbox_action(self, parsed: dict[str, Any]) -> None:
-        """Resolve a pending PowerPulse 2 write against the arriving frame.
+    def _resolve_pending_write(self, parsed: dict[str, Any]) -> None:
+        """Resolve a pending device write against the arriving frame.
 
         ADR-009 decision 4, extended by PLAN-146: the check runs on the frame
         being applied, never on the accumulated store, so a stale reading
@@ -433,10 +435,20 @@ class StateApplyMixin(_Base):
         settings report, which `_resolve_wallbox_charge_mode` converts into
         `ev_charge_mode` before this runs; the heartbeat confirms it only
         while no recent settings report owns that key.
+
+        A record with `require` set (PLAN-190, a PowerGlow write naming its
+        rod's serial) only accepts a frame whose value at that key matches,
+        so a report from another rod on the same PowerOcean cannot confirm it.
         """
-        record = self._wallbox_action_pending
+        record = self._pending_write
         if record is None or record.future.done():
             return
+        if record.require is not None:
+            # A write tied to one source (PLAN-190, a PowerGlow rod's serial):
+            # a frame from another source never confirms it.
+            required_key, required_value = record.require
+            if parsed.get(required_key) != required_value:
+                return
         if record.expected_value is not None:
             if record.state_key not in parsed:
                 return
@@ -481,6 +493,7 @@ class StateApplyMixin(_Base):
         """
         if "ev_settings_switch_bits" not in parsed:
             return
+        self._settings_report_seq += 1
         self._settings_report = (
             now,
             {
@@ -499,6 +512,18 @@ class StateApplyMixin(_Base):
                 if key in parsed
             },
         )
+        self._notify_settings_waiters()
+
+    def _notify_settings_waiters(self) -> None:
+        """Wake the settings writes that wait for a report or a free slot (#495).
+
+        The event is replaced before it is set, so a waiter that took the old
+        one under the write lock is woken and one that arrives after waits on
+        the new one: a change between the check and the wait is never lost.
+        Runs on the event loop only.
+        """
+        wake, self._settings_wake = self._settings_wake, asyncio.Event()
+        wake.set()
 
     def latch_schedule_armed(self, state_key: str, armed: bool) -> None:
         """Start the hold for one arming flag this integration just sent."""
@@ -561,7 +586,7 @@ class StateApplyMixin(_Base):
         self._resolve_soc(parsed)
         self._resolve_schedule_armed(parsed)
         self._resolve_wallbox_charge_mode(parsed, now)
-        self._resolve_wallbox_action(parsed)
+        self._resolve_pending_write(parsed)
         if own_connection:
             self._record_settings_report(parsed, now)
 
@@ -595,6 +620,13 @@ class StateApplyMixin(_Base):
         self._note_value_change(parsed)
 
         self._device_data.update(parsed)
+
+        # Ocean 2 writes (PLAN-151, PLAN-192): a Backup Reserve write waits for a
+        # frame carrying field 92 and confirms itself on one carrying field 10;
+        # a Storm Guard write confirms itself on one carrying field 21. All are
+        # seen here, after the store holds them.
+        if self.device_type == DEVICE_TYPE_OCEAN2:
+            self._note_ocean2_snapshot(parsed)
 
         # WAVE 3 (#161): re-derive the four generic active-mode keys from
         # accumulated state, not from this message alone. A 2s incremental

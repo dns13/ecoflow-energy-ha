@@ -11,7 +11,8 @@ A Local (Modbus/TCP) entry for a three-phase PowerOcean creates only these share
 > **The heating rod readings are optional and work in Standard and Enhanced
 > Mode, not on a Local entry.** They belong to the PowerGlow accessory, so they
 > are only created once your system actually reports a heating rod. A
-> PowerOcean without one gets no heating rod entities.
+> PowerOcean without one gets no heating rod entities. They are enabled by
+> default since 1.25.0; one you had disabled before stays disabled.
 > In Standard Mode they come from the API quota. With EcoFlow
 > account sign-in they arrive on the PowerOcean's real-time stream instead, in
 > one report roughly every seventeen seconds, so a PowerGlow attached to a unit
@@ -64,7 +65,7 @@ A Local (Modbus/TCP) entry for a three-phase PowerOcean creates only these share
 
 > **PowerOcean Plus** units report more of the same entity set than a standard PowerOcean: per-phase reactive power (var) and apparent power (VA), plus MPPT strings 3 and 4. Those entities are disabled by default, so enable the ones you need after adding a Plus device.
 
-**Totals:** an account entry (Standard or Enhanced Mode) has 249 sensors, 21 binary sensors, 18 numbers, 16 switches and 1 select. A Local (Modbus/TCP) entry has 28 sensors (20 of the sensors below plus the 8 in the Local-only section), 4 binary sensors, 2 numbers and 1 switch.
+**Totals:** an account entry (Standard or Enhanced Mode) has 249 sensors, 21 binary sensors, 20 numbers, 16 switches and 2 selects. A Local (Modbus/TCP) entry has 28 sensors (20 of the sensors below plus the 8 in the Local-only section), 4 binary sensors, 2 numbers and 1 switch.
 
 > Entities marked with *disabled* are available but hidden by default. Enable them in **Settings > Devices > EcoFlow PowerOcean > Entities** (click the filter icon and show disabled entities).
 
@@ -182,10 +183,10 @@ These sensors are pre-configured for the HA Energy Dashboard (`total_increasing`
 | Battery Max Charge/Discharge Power | Battery power limits | disabled |
 | Battery Packs Online | Number of packs currently reporting | disabled |
 | Battery Packs Online (EMS) | Pack count as reported by the EMS | disabled |
-| Heating Rod Power | Power drawn by an attached PowerGlow heating rod, in watts. Reported through the PowerOcean itself, so no separate device is needed. Only created on systems that report a heating rod (see note above). | disabled |
-| Heating Rod Water Temperature | Current water temperature at the heating rod, in whole degrees. | disabled |
-| Heating Rod Target Power | The power limit configured for the heating rod, in watts. | disabled |
-| Heating Rod Target Temperature | The water temperature the heating rod is set to reach. | disabled |
+| Heating Rod Power | Power drawn by an attached PowerGlow heating rod, in watts. Reported through the PowerOcean itself, so no separate device is needed. Only created on systems that report a heating rod (see note above). | enabled |
+| Heating Rod Water Temperature | Current water temperature at the heating rod, in whole degrees. | enabled |
+| Heating Rod Target Power | The power limit configured for the heating rod, in watts. | enabled |
+| Heating Rod Target Temperature | The water temperature the heating rod is set to reach. | enabled |
 | EMS Max Internal Temp | Highest of the internal temperature probes | enabled |
 | MPPT 1/2 Warning Code | MPPT warnings, separate from the fault codes. Unlabelled in the same way, and only reported on the real-time connection. | disabled |
 | AFCI Self-Test Result | Result of the arc-fault detector self-test | disabled |
@@ -351,6 +352,18 @@ Each battery pack creates 24 sensors (7 core + 17 diagnostic). Pack 1 core senso
 
 ---
 
+## Heating Rod Controls (accessory, Enhanced Mode)
+
+Created once the PowerOcean reports a PowerGlow heating rod, and only with account sign-in. They are configuration entities on the PowerOcean device. Each change waits until the heating rod reports the new value back. If that report does not arrive within 20 seconds, Home Assistant shows an error and keeps the reported value. Switching from Off to Solar or Manual is two steps with 20 seconds each.
+
+| Entity | Type | Description | Default |
+|:---|:---:|:---|:---:|
+| Heating Rod Target Power | Number | The heating power the rod is limited to, in watts. The upper end follows the rod: 9000 W on an `HF33`, 6000 W on an `HF32`, 3500 W on other models | enabled |
+| Heating Rod Target Temperature | Number | The water temperature the rod heats to, from 10 to 80 °C | enabled |
+| Heating Rod Mode | Select | Off, Solar or Manual. Switching from Off to Solar or Manual sets the mode first and then switches the rod on | enabled |
+
+---
+
 ## Sensors - PowerPulse Wallbox (accessory, Enhanced Mode)
 
 Created only once a coupled wallbox reports a charging session. See the note at the top. These are the PowerPulse 1; the PowerPulse 2 has [its own page](powerpulse-2.md).
@@ -372,6 +385,9 @@ Created only once a coupled wallbox reports a charging session. See the note at 
 | Backup Reserve | Number | 0 - 100 % | Enhanced only |
 | Solar Surplus Threshold | Number | 0 - 100 % | Enhanced only |
 | Work Mode | Select | Self-use / AI Schedule | Enhanced only |
+| Heating Rod Target Power | Number | 0 - 9000 W (by model) | Enhanced only |
+| Heating Rod Target Temperature | Number | 10 - 80 °C | Enhanced only |
+| Heating Rod Mode | Select | Off / Solar / Manual | Enhanced only |
 
 ---
 
@@ -379,6 +395,6 @@ Created only once a coupled wallbox reports a charging session. See the note at 
 
 - All power sensors show integers (no decimal places) for clean dashboard display
 - Energy sensors show 2 decimal places (0.01 kWh resolution)
-- Enhanced Mode (~3s updates) unlocks every control (18 numbers, 16 switches, 1 select) and faster data
+- Enhanced Mode (~3s updates) unlocks every control (20 numbers, 16 switches, 2 selects) and faster data
 - Standard Mode (~30s polling) provides the sensors the Developer API reports. Some readings need Enhanced Mode, for example the schedules, the wallbox, the parallel pair and several diagnostics.
 - Local (Modbus/TCP, three-phase only) refreshes every 2 seconds, needs no account, and creates the shared sensors and Local-only entities listed above.

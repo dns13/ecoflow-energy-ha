@@ -43,6 +43,10 @@ from .ecoflow.const import (  # noqa: E402
     get_device_name,  # noqa: F401
     get_device_type,  # noqa: F401
 )
+from .ecoflow.energy_stream import (  # noqa: E402
+    POWERGLOW_TARGET_TEMP_C_MAX,
+    POWERGLOW_TARGET_TEMP_C_MIN,
+)
 from .ecoflow.parsers.delta_pro_ultra_proto import (
     MAX_PACKS as DELTAPROULTRA_MAX_PACKS,  # noqa: E402
 )
@@ -52,7 +56,14 @@ from .ecoflow.parsers.hr61_proto import (
 from .ecoflow.parsers.ocean2_proto import (
     MAX_MODULES as OCEAN2_MAX_MODULES,  # noqa: E402
 )
-from .ecoflow.parsers.powerocean import PARALLEL_UNIT_MAX  # noqa: E402
+from .ecoflow.parsers.ocean2_proto import (  # noqa: E402
+    OCEAN2_CONTROL_MODES,
+    OCEAN2_WORK_MODES,
+)
+from .ecoflow.parsers.powerocean import (  # noqa: E402
+    EMS_WORK_STATES,
+    PARALLEL_UNIT_MAX,
+)
 from .ecoflow.parsers.powerocean_proto import SCHEDULE_MAX_INDEX  # noqa: E402
 from .ecoflow.parsers.smart_home_panel_2_proto import (
     CIRCUIT_COUNT as SMARTHOMEPANEL2_CIRCUIT_COUNT,  # noqa: E402
@@ -189,11 +200,14 @@ POWERPULSE2_HARD_UNAVAILABLE_S = 3600.0
 # for like.
 POWERPULSE2_CHARGE_ACTION_WINDOW_S: dict[str, float] = {"stop": 15.0, "start": 30.0}
 # ADR-009 decision 5: the wallbox status an action may be sent from. Start
-# only from "finishing" (the only start transition observed on file); stop
-# only from "charging".
+# only from "finishing" (the only start transition observed on file). Stop
+# from "charging" and, as amended for #515, from "suspended_charger": a start
+# waiting for solar surplus can be cancelled. The app enables its stop in
+# that state and sends the same command; confirmation still needs a fresh
+# "finishing" or "available".
 POWERPULSE2_CHARGE_ACTION_PRECONDITION: dict[str, frozenset[str]] = {
     "start": frozenset({"finishing"}),
-    "stop": frozenset({"charging"}),
+    "stop": frozenset({"charging", "suspended_charger"}),
 }
 # ADR-009 decision 4: the `ev_charge_status` that confirms the action once it
 # arrives on the wallbox's own heartbeat. As amended for #515, a start also
@@ -214,6 +228,11 @@ POWERPULSE2_MAX_CURRENT_WINDOW_S: float = 20.0
 # same generous Home Assistant service-call allowance as the maximum-current
 # window above, for the same reason - not a measured worst case.
 POWERPULSE2_CHARGE_CURRENT_WINDOW_S: float = 20.0
+# PLAN-190: the confirmation window for a PowerGlow heating rod write. The rod
+# reports the new value on its next 212/8 report; the read-back measured 0.5 to
+# 5.1 s over the recorded writes, so 20 s leaves the same generous Home
+# Assistant service-call allowance as the PowerPulse windows above.
+POWERGLOW_WRITE_WINDOW_S: float = 20.0
 # PLAN-146: the maximum current range, the owner's sweep on #7 covered end to
 # end (2026-09-10).
 POWERPULSE2_MAX_CURRENT_RANGE_A: tuple[int, int] = (6, 16)
@@ -245,6 +264,11 @@ POWERPULSE2_SETTINGS_WINDOW_S: float = 20.0
 # a Continuous write is rebuilt from the latest report's switch byte, and a
 # report older than this may already disagree with the wallbox.
 POWERPULSE2_SETTINGS_MAX_AGE_S: float = 10.0
+# #495: how long a settings write waits for the next settings report before it
+# refuses a missing or stale one. The report arrives about once a second, so five
+# seconds is several reports; a write that finds none in that time is refused as
+# before. Nothing is sent while it waits.
+POWERPULSE2_SETTINGS_FRESH_WAIT_S: float = 5.0
 # PLAN-172: bit 4 (0x10) of the settings switch bits is the app's
 # "Continuous charging" toggle (2026-10-04 write recordings, issue #481).
 POWERPULSE2_SWITCH_BIT_CONTINUOUS: int = 0x10
@@ -614,6 +638,10 @@ class EcoFlowSwitchDef:
     # `state_key` and writes it through `async_set_powerpulse_display`, keyed
     # by `key`.
     bit_mask: int | None = None
+    # Same meaning as on the number and select definitions: "config" or
+    # "diagnostic", set on a switch that is a device setting rather than a
+    # day-to-day control (the Ocean 2 Storm Guard, PLAN-192).
+    entity_category: str | None = None
 
 
 @dataclass(frozen=True)
@@ -679,6 +707,8 @@ class EcoFlowSelectDef:
     # that carries the state key, so a setting the device never reports gets
     # no select. See _watch_for_accessory() in select.py.
     accessory: bool = False
+    # Same meaning as on the number definition ("config" or "diagnostic").
+    entity_category: str | None = None
 
 
 # =====================================================================
@@ -1021,7 +1051,10 @@ POWEROCEAN_SENSORS: list[EcoFlowSensorDef] = [
         disabled_by_default=True,
     ),
     # PowerGlow heating rod: an optional accessory, so these four are created
-    # only after the device has reported them at least once (#7).
+    # only after the device has reported them at least once (#7). Enabled by
+    # default since 1.25.0: only a PowerOcean that reports a rod gets them, so
+    # they never clutter a system without one. An entity already registered as
+    # disabled keeps that state.
     EcoFlowSensorDef(
         "heating_rod_power_w",
         "Heating Rod Power",
@@ -1031,7 +1064,6 @@ POWEROCEAN_SENSORS: list[EcoFlowSensorDef] = [
         "mdi:water-boiler",
         "diagnostic",
         suggested_display_precision=0,
-        disabled_by_default=True,
         accessory=True,
     ),
     EcoFlowSensorDef(
@@ -1043,7 +1075,6 @@ POWEROCEAN_SENSORS: list[EcoFlowSensorDef] = [
         "mdi:thermometer-water",
         "diagnostic",
         suggested_display_precision=0,
-        disabled_by_default=True,
         accessory=True,
     ),
     EcoFlowSensorDef(
@@ -1055,7 +1086,6 @@ POWEROCEAN_SENSORS: list[EcoFlowSensorDef] = [
         "mdi:water-boiler",
         "diagnostic",
         suggested_display_precision=0,
-        disabled_by_default=True,
         accessory=True,
     ),
     EcoFlowSensorDef(
@@ -1067,7 +1097,6 @@ POWEROCEAN_SENSORS: list[EcoFlowSensorDef] = [
         "mdi:thermometer-chevron-up",
         "diagnostic",
         suggested_display_precision=0,
-        disabled_by_default=True,
         accessory=True,
     ),
     EcoFlowSensorDef(
@@ -2624,6 +2653,44 @@ POWEROCEAN_NUMBERS: list[EcoFlowNumberDef] = [
         5,
         enhanced_only=True,
     ),
+    # PowerGlow heating rod controls (#7, PLAN-190). The rod is an optional
+    # accessory: each control is created on the first 212/8 report of its own
+    # read-back key, so a PowerOcean without a rod gets none of them. The write
+    # waits for that same report, so the number shows what the rod holds and
+    # nothing in between. Same key as the matching diagnostic sensor, as the
+    # PowerPulse 2 setpoint has: a number and a sensor are separate platforms
+    # with separate translations.
+    #
+    # The declared ceiling is the highest any rod accepts (HF33); the entity
+    # narrows it to the rod's own serial prefix once the serial is reported
+    # (`_derived_bounds` in number.py). A whole watt is a valid value: the
+    # app prompt has no step, and the targets on file include 25, 125 and 326.
+    EcoFlowNumberDef(
+        "heating_rod_target_power_w",
+        "Heating Rod Target Power",
+        "heating_rod_target_power_w",
+        "W",
+        "mdi:water-boiler",
+        0,
+        9000,
+        1,
+        enhanced_only=True,
+        accessory=True,
+        entity_category="config",
+    ),
+    EcoFlowNumberDef(
+        "heating_rod_target_temp_c",
+        "Heating Rod Target Temperature",
+        "heating_rod_target_temp_c",
+        "°C",
+        "mdi:thermometer-chevron-up",
+        POWERGLOW_TARGET_TEMP_C_MIN,
+        POWERGLOW_TARGET_TEMP_C_MAX,
+        1,
+        enhanced_only=True,
+        accessory=True,
+        entity_category="config",
+    ),
 ]
 
 
@@ -2637,6 +2704,20 @@ POWEROCEAN_SELECTS: list[EcoFlowSelectDef] = [
         ("self_use", "ai_schedule"),
         icon="mdi:cog-transfer",
         enhanced_only=True,
+    ),
+    # PowerGlow heating rod: off, Solar surplus or Manual (#7, PLAN-190). The
+    # state is derived from the rod's run switch and mode on its 212/8 report
+    # (`heating_rod_operating_mode`), so the gate is that derived key and it
+    # needs no value map. Created on the first report, like the two numbers.
+    EcoFlowSelectDef(
+        "heating_rod_operating_mode",
+        "Heating Rod Mode",
+        "heating_rod_operating_mode",
+        ("off", "solar", "manual"),
+        icon="mdi:water-boiler",
+        enhanced_only=True,
+        accessory=True,
+        entity_category="config",
     ),
 ]
 
@@ -5832,6 +5913,24 @@ def supports_stream_controls(device_sn: str) -> bool:
     return device_sn[:4].upper() in STREAM_CONTROL_PREFIXES
 
 
+# Ocean 2 variants that may be written to. Only the RE11 has writes on record
+# (the Backup Reserve and the Storm Guard switch, each with its
+# acknowledgement), so only it gets the controls.
+# RE17 is routed with the RE11 for reading, and RE41, RE42 and RE43 differ on
+# the read side already; a read-only routing does not carry over to a write.
+# This gate says the write is confirmed on the model, the accessory gate on the
+# number and the switch says this unit reports the value: two facts, not two
+# names for one.
+OCEAN2_CONTROL_PREFIXES: frozenset[str] = frozenset({"RE11"})
+
+
+def supports_ocean2_controls(device_sn: str) -> bool:
+    """Return whether this Ocean 2 variant may be written to."""
+    if not device_sn:
+        return False
+    return device_sn[:4].upper() in OCEAN2_CONTROL_PREFIXES
+
+
 class _HasKey(Protocol):
     """Structural bound for `filter_defs_for_serial`.
 
@@ -7753,6 +7852,49 @@ WAVE3_SELECTS: list[EcoFlowSelectDef] = [
 # as its MPPT inputs are wired, and an entity that never fills reads as a
 # broken sensor rather than an unused input.
 OCEAN2_SENSORS: list[EcoFlowSensorDef] = [
+    # The EMS status record (254/39 field 3): what the app shows as the work
+    # mode, what the system is doing, and which program overrides the mode.
+    # It rides mostly on the full snapshot, so these are accessories and
+    # appear on the first report. The options come from the parser's tables,
+    # which are the only place the wire values are named. Work mode and system
+    # state share their keys, state names and translations with the
+    # PowerOcean's sensors of the same name.
+    EcoFlowSensorDef(
+        "ems_work_mode",
+        "Work Mode",
+        None,
+        "enum",
+        None,
+        "mdi:cog",
+        "diagnostic",
+        enhanced_only=True,
+        options=list(OCEAN2_WORK_MODES.values()),
+        accessory=True,
+    ),
+    EcoFlowSensorDef(
+        "ems_work_state",
+        "System State",
+        None,
+        "enum",
+        None,
+        "mdi:state-machine",
+        "diagnostic",
+        enhanced_only=True,
+        options=list(EMS_WORK_STATES.values()),
+        accessory=True,
+    ),
+    EcoFlowSensorDef(
+        "ems_control_mode",
+        "Control Mode",
+        None,
+        "enum",
+        None,
+        "mdi:tune-variant",
+        "diagnostic",
+        enhanced_only=True,
+        options=list(OCEAN2_CONTROL_MODES.values()),
+        accessory=True,
+    ),
     EcoFlowSensorDef(
         "soc_pct",
         "Battery SOC",
@@ -8500,6 +8642,47 @@ def _build_ocean2_module_sensors(module_num: int) -> list[EcoFlowSensorDef]:
 
 for _module_num in range(1, OCEAN2_MAX_MODULES + 1):
     OCEAN2_SENSORS.extend(_build_ocean2_module_sensors(_module_num))
+
+
+# Ocean 2 controls (PLAN-151). One number: the Backup Reserve, the same setting
+# the app offers as a percentage slider. The floor of 1 is the lowest value the
+# device acknowledged; 0 was never sent. The ceiling follows the device's own
+# SoC ratio (`edev_soc_ratio_pct`) at runtime, see
+# `EcoFlowNumber._is_ocean2_backup_reserve`. Created per variant by
+# `supports_ocean2_controls` and, because it is an accessory, only once the unit
+# has reported the value.
+OCEAN2_NUMBERS: list[EcoFlowNumberDef] = [
+    EcoFlowNumberDef(
+        "backup_reserve",
+        "Backup Reserve",
+        "backup_reserve_pct",
+        "%",
+        "mdi:battery-lock",
+        1,
+        100,
+        1,
+        enhanced_only=True,
+        accessory=True,
+        slider=True,
+    ),
+]
+
+# The Ocean 2 Storm Guard switch (PLAN-192): the setting the app offers as a
+# switch, written as an action command and confirmed by the next full snapshot
+# (`EcoFlowDeviceCoordinator.async_set_ocean2_storm_guard`). The read-back key
+# is only on that snapshot, so as an accessory the switch is created once the
+# unit has reported it, and the variant gate is `supports_ocean2_controls`.
+OCEAN2_SWITCHES: list[EcoFlowSwitchDef] = [
+    EcoFlowSwitchDef(
+        "storm_guard",
+        "Storm Guard",
+        "storm_guard_enabled",
+        "mdi:weather-lightning-rainy",
+        enhanced_only=True,
+        accessory=True,
+        entity_category="config",
+    ),
+]
 
 
 # OCEAN Smart Electrical Panel 40 (`HR61`). Enhanced mode only: the one
