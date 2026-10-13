@@ -50,7 +50,8 @@ Data shape:
   (issue #401), so the block is decoded one entry at a time and handed to
   the coordinator keyed by serial: see `_decode_pv_entry`.
 
-Not mapped: ``f50.1.4`` latches at rest (see the field map); ``f38.1`` and
+Not mapped: ``f50.1.4`` latches at rest (see the field map) and only lends
+its sign to the unsigned per-unit ``f54.1.4``; ``f38.1`` and
 ``f44`` repeat pack readings `32/50` already carries, and mapping both
 makes the keys flap; ``f38.1.3``/``f44.2`` look like a cycle count but
 read 497, 499 and 1311 within minutes; ``f33.9`` sat at 600 throughout and
@@ -89,6 +90,11 @@ _UNIT_POWER_SCALE = 0.5
 # Key the coordinator consumes and removes: the serial decides which unit a
 # reading belongs to, and only the coordinator knows which serial it is.
 UNIT_POWER_BY_SN_KEY = "_unit_batt_w_by_sn"
+# `f54.1.4` is a magnitude: a unit discharging 7 W reads 14, the same as one
+# charging 7 W. The direction comes from the same message only; see
+# `_sign_unit_entries`. Internal, consumed in `_finalize`.
+_UNIT_DIRECTION_BY_SN_KEY = "_unit_batt_direction_by_sn"
+_PV_BATT_FIELD = 4
 # The same for the MPPT block: serial -> the five PV keys of that unit.
 UNIT_PV_BY_SN_KEY = "_unit_pv_by_sn"
 # Inside each `f50.1` entry: the state of charge the entry carries in `.2`,
@@ -1086,7 +1092,49 @@ def _finalize(parsed: dict[str, Any]) -> dict[str, Any]:
         # coordinator pops any parser-provided value and derives the state
         # from a hysteresis window over batt_w.
 
+    _sign_unit_entries(result)
     return result
+
+
+def _sign_unit_entries(result: dict[str, Any]) -> None:
+    """Give each per-unit `f54` magnitude the direction this message proves.
+
+    `f54.1.4` carries no sign, so the direction has to come from the same
+    message, from one of two places:
+
+    - the signed `f50.1.4` of the same serial. Only a polled reply carries
+      it; the pushes in between carry `f54` alone. `f50.1.4` latches at
+      rest, which is harmless because `f54` itself reaches 0 and a 0 needs
+      no sign.
+    - the system battery power, when this is the only unit moving power:
+      the system is then this unit.
+
+    Anything else is set to None, which the coordinator reads as "not proven
+    by this message" and keeps the unit's last reading. Carrying a direction
+    over from an earlier message was tried and is wrong after every change of
+    direction: the pushes that carry no proof then show the old sign until
+    the next proof, and both kWh counters run at once, which cannot be
+    corrected afterwards. Deriving the sign from the system was wrong too
+    whenever two units moved power: a charging Ultra read as discharging
+    while the AC 5000 beside it discharged more.
+    """
+    magnitudes = result.pop(UNIT_POWER_BY_SN_KEY, None)
+    directions = result.pop(_UNIT_DIRECTION_BY_SN_KEY, None) or {}
+    if not magnitudes:
+        return
+    alone = sum(1 for watts in magnitudes.values() if watts) == 1
+    signed: dict[str, float | None] = {}
+    for serial, watts in magnitudes.items():
+        direction = directions.get(serial)
+        if not direction and alone:
+            direction = result.get("batt_w")
+        if watts == 0:
+            signed[serial] = 0.0
+        elif isinstance(direction, (int, float)) and direction:
+            signed[serial] = abs(watts) if direction > 0 else -abs(watts)
+        else:
+            signed[serial] = None
+    result[UNIT_POWER_BY_SN_KEY] = signed
 
 
 def _iter_fields(payload: bytes) -> list[tuple[int, int, bytes]]:
@@ -1159,6 +1207,31 @@ def _read_unit_entries(payload: bytes) -> dict[str, float]:
             if serial and power is not None:
                 entries[serial] = float(power) * _UNIT_POWER_SCALE
     return entries
+
+
+def _read_unit_directions(payload: bytes) -> dict[str, float]:
+    """Return the signed `f50.1.4` battery power per unit serial.
+
+    Used only for its sign: see `_sign_unit_entries`. An entry without the
+    field (zero, or a unit at rest) is left out.
+    """
+    directions: dict[str, float] = {}
+    for number, wire_type, raw in _iter_fields(payload):
+        if number != 50 or wire_type != 2:
+            continue
+        for entry_num, entry_wire, entry_raw in _iter_fields(raw):
+            if entry_num != 1 or entry_wire != 2:
+                continue
+            serial: str | None = None
+            power: float | int | None = None
+            for num, wire, value in _iter_fields(entry_raw):
+                if num == _PV_SERIAL_FIELD and wire == 2:
+                    serial = _serial_text(value)
+                elif num == _PV_BATT_FIELD and wire == 5:
+                    power = _decode_scalar(5, value, _TYPE_FLOAT)
+            if serial and isinstance(power, float) and isfinite(power):
+                directions[serial] = power
+    return directions
 
 
 def _pdata_candidates(header: dict[str, Any]) -> list[bytes]:
@@ -1238,12 +1311,15 @@ def parse_stream_ac5000_message(payload: bytes) -> dict[str, Any] | None:
                 if cmd_key == _CMD_TELEMETRY:
                     try:
                         unit_entries = _read_unit_entries(pdata)
+                        unit_directions = _read_unit_directions(pdata)
                     except (IndexError, ValueError):
                         # A malformed per-unit block costs its own reading,
                         # never the telemetry that already decoded cleanly.
-                        unit_entries = {}
+                        unit_entries, unit_directions = {}, {}
                     if unit_entries:
                         decoded[UNIT_POWER_BY_SN_KEY] = unit_entries
+                    if unit_directions:
+                        decoded[_UNIT_DIRECTION_BY_SN_KEY] = unit_directions
                 merged.update(decoded)
                 break
             # A decode error is contained to the message that caused it: the

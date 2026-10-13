@@ -4881,6 +4881,30 @@ STREAMAC5000_SENSORS: list[EcoFlowSensorDef] = [
         suggested_display_precision=0,
         disabled_by_default=True,
     ),
+    # Unit Battery Power split by direction, for the Energy Dashboard. Off by
+    # default with it: on a single unit they repeat the system split.
+    EcoFlowSensorDef(
+        "unit_batt_charge_power_w",
+        "Unit Battery Charge Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:battery-charging-outline",
+        "diagnostic",
+        suggested_display_precision=0,
+        disabled_by_default=True,
+    ),
+    EcoFlowSensorDef(
+        "unit_batt_discharge_power_w",
+        "Unit Battery Discharge Power",
+        "W",
+        "power",
+        "measurement",
+        "mdi:battery-outline",
+        "diagnostic",
+        suggested_display_precision=0,
+        disabled_by_default=True,
+    ),
     # --- power flow ---
     EcoFlowSensorDef(
         "home_w",
@@ -5428,6 +5452,30 @@ STREAMAC5000_SENSORS: list[EcoFlowSensorDef] = [
         "total_increasing",
         "mdi:battery",
         suggested_display_precision=2,
+    ),
+    # This unit's share of the two counters above, which count the group when
+    # units are linked. Off by default like the power readings they integrate.
+    EcoFlowSensorDef(
+        "unit_batt_charge_energy_kwh",
+        "Unit Battery Charge Energy",
+        "kWh",
+        "energy",
+        "total_increasing",
+        "mdi:battery-charging-outline",
+        "diagnostic",
+        suggested_display_precision=2,
+        disabled_by_default=True,
+    ),
+    EcoFlowSensorDef(
+        "unit_batt_discharge_energy_kwh",
+        "Unit Battery Discharge Energy",
+        "kWh",
+        "energy",
+        "total_increasing",
+        "mdi:battery-outline",
+        "diagnostic",
+        suggested_display_precision=2,
+        disabled_by_default=True,
     ),
     EcoFlowSensorDef(
         "grid_import_energy_kwh",
@@ -9927,6 +9975,8 @@ STREAMAC5000_POWER_TO_ENERGY: dict[str, str] = {
     "home_w": "home_energy_kwh",
     "batt_charge_power_w": "batt_charge_energy_kwh",
     "batt_discharge_power_w": "batt_discharge_energy_kwh",
+    "unit_batt_charge_power_w": "unit_batt_charge_energy_kwh",
+    "unit_batt_discharge_power_w": "unit_batt_discharge_energy_kwh",
     # This device reports the grid split as separate flow edges, so import and
     # export each get an honest counter instead of one signed total.
     "grid_import_power_w": "grid_import_energy_kwh",
