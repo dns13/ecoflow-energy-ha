@@ -8,7 +8,7 @@ For installation and quick-start, see the main [README](../README.md).
 
 Complete list of all sensors, switches, numbers, and binary sensors per device:
 
-- [PowerOcean](entities/powerocean.md) - 249 sensors, 21 binary sensors, 18 numbers, 16 switches, 1 select (`HJ31`, `HJ32`, `HJ35`, `HJ36`, `HJ37`, `J32B`, `J327`, `J329`, `J32D`, `J32E`, and the Plus variants `R371`, `R372`, `R374`, `HJ3C`) on an account entry. A Local (Modbus/TCP) entry for a three-phase PowerOcean has 28 sensors, 4 binary sensors, 2 numbers and 1 switch
+- [PowerOcean](entities/powerocean.md) - 249 sensors, 21 binary sensors, 20 numbers, 16 switches, 2 selects (`HJ31`, `HJ32`, `HJ35`, `HJ36`, `HJ37`, `J32B`, `J327`, `J329`, `J32D`, `J32E`, and the Plus variants `R371`, `R372`, `R374`, `HJ3C`) on an account entry. A Local (Modbus/TCP) entry for a three-phase PowerOcean has 28 sensors, 4 binary sensors, 2 numbers and 1 switch
 - [Delta 2 Max](entities/delta-2-max.md) - 94 sensors, 4 binary sensors, 7 switches, 8 numbers (`R351`, `R331`)
 - [Delta 3 Max Plus](entities/delta-3-max-plus.md) - 47 sensors, 7 switches, 4 numbers, 5 selects (`D3M1`, `D3N1`, `P321`, `P231`, `P351`), plus 3 switches, 3 numbers and 1 binary sensor for port priority on `D3M` serials
 - [Smart Plug](entities/smart-plug.md) - 11 sensors, 1 binary sensor, 1 switch, 2 numbers (`HW52`)
@@ -22,7 +22,7 @@ Complete list of all sensors, switches, numbers, and binary sensors per device:
 - [WAVE 3](entities/wave-3.md) - 18 sensors, 5 binary sensors, 4 switches, 5 numbers, 5 selects, 1 climate (`AC71`) - a portable air conditioner, Enhanced Mode only
 - [PowerPulse 2](entities/powerpulse-2.md) - 18 sensors, 1 binary sensor, 6 numbers, 2 selects, 5 switches, 2 buttons (`C376`, `C374`) - a wallbox, no PowerOcean required for the readings. Start and stop work with no PowerOcean or exactly one in the same integration entry. With exactly one PowerOcean, the maximum current, the solar minimum and custom charging currents, the charging mode, the phase setting, Continuous Charging, Block Battery Discharge, Plug-and-Play, the screen and the LED indicator, and their brightness can be set. With none, the charging current can. Enhanced Mode only
 - [PowerPulse 2](entities/powerpulse-2.md) - 18 sensors, 1 binary sensor (`C371`) - the same readings as the `C376` and `C374`, read-only for now, Enhanced Mode only
-- [Ocean 2](entities/ocean-2.md) - 48 sensors plus 12 per battery module (`RE11`, `RE17`, `RE41`, `RE42`, `RE43`) - a home battery, read-only, Enhanced Mode only
+- [Ocean 2](entities/ocean-2.md) - 51 sensors plus 12 per battery module (`RE11`, `RE17`, `RE41`, `RE42`, `RE43`) - a home battery, read-only apart from a Backup Reserve number and a Storm Guard switch on the `RE11`, Enhanced Mode only
 - [OCEAN Smart Electrical Panel 40](entities/smart-panel-40.md) - 19 sensors plus 3 sensors and 1 binary sensor per circuit (`HR61`) - a US split-phase load panel, read-only, Enhanced Mode only
 - [DELTA Pro Ultra](entities/delta-pro-ultra.md) - 21 sensors plus 2 per battery pack (`Y711`) - a home backup power station, read-only, Enhanced Mode only
 - [Smart Home Panel 2](entities/smart-home-panel-2.md) - 9 sensors plus 2 per circuit and 1 per storage channel (`HD31`) - a US split-phase load panel with battery backup, read-only, Enhanced Mode only

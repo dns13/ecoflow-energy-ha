@@ -24,7 +24,8 @@ if TYPE_CHECKING:
     from ..ecoflow.energy_integrator import EnergyIntegrator
     from ..ecoflow.frame_capture import TypedFrameBuffer
     from ..ecoflow.iot_api import IoTApiClient
-    from .core import DeviceSnapshot, EcoFlowDeviceCoordinator, WallboxActionPending
+    from .core import DeviceSnapshot, EcoFlowDeviceCoordinator, PendingDeviceWrite
+    from .set_commands import _Ocean2Write
     from .state_apply import SurplusSyncRecord
 
 
@@ -51,13 +52,20 @@ class CoordinatorState(DataUpdateCoordinator[dict[str, Any]]):
     _iot_api: IoTApiClient | None
     _config_writes_sent: dict[int, float]
     _device_config_lock: asyncio.Lock
-    _wallbox_action_lock: asyncio.Lock
-    _wallbox_action_pending: WallboxActionPending | None
+    _pending_write_lock: asyncio.Lock
+    _pending_write: PendingDeviceWrite | None
     _settings_report: tuple[float, dict[str, Any]] | None
+    _settings_wake: asyncio.Event
+    _settings_write_seq: int
+    _settings_calls: dict[int, str]
+    _settings_report_seq: int
+    _settings_published_seq: int
     _powerocean_soc_pending: tuple[int, int] | None
     _powerocean_soc_pending_revision: int
     _powerocean_soc_debounce_unsub: asyncio.TimerHandle | None
     _powerocean_soc_flush_tasks: set[asyncio.Task[None]]
+    _ocean2_snapshot_event: asyncio.Event
+    _ocean2_writes: dict[str, _Ocean2Write]
     _powerocean_soc_write_tasks: set[asyncio.Future[Any]]
     _powerocean_soc_before: dict[str, Any]
     _powerocean_soc_generation: int
@@ -66,7 +74,7 @@ class CoordinatorState(DataUpdateCoordinator[dict[str, Any]]):
     _powerocean_soc_active_revisions: set[int]
     _powerocean_soc_latest_outcome: bool | None
     _powerocean_soc_cycle_open: bool
-    _powerocean_soc_rollback_generation: int
+    _write_rollback_generation: int
     _last_mqtt_ts: float
     _energy_integrator: EnergyIntegrator
     _bp_sn_to_index: dict[str, int]
@@ -130,6 +138,14 @@ class CoordinatorState(DataUpdateCoordinator[dict[str, Any]]):
 
     def _log_event(self, event_type: str, detail: str) -> None: ...
 
+    def _note_ocean2_snapshot(self, parsed: dict[str, Any]) -> None: ...
+
+    def _cancel_ocean2_readback(self) -> None: ...
+
+    def _ocean2_restore_write(self, write: _Ocean2Write) -> None: ...
+
+    def _ocean2_reject_write(self, write: _Ocean2Write) -> None: ...
+
     def latch_schedule_armed(self, state_key: str, armed: bool) -> None: ...
 
     def clear_schedule_armed_latch(self, state_key: str) -> None: ...
@@ -152,7 +168,9 @@ class CoordinatorState(DataUpdateCoordinator[dict[str, Any]]):
         self, parsed: dict[str, Any], now: float
     ) -> None: ...
 
-    def _resolve_wallbox_action(self, parsed: dict[str, Any]) -> None: ...
+    def _resolve_pending_write(self, parsed: dict[str, Any]) -> None: ...
+
+    def _notify_settings_waiters(self) -> None: ...
 
     def _integrate_energy(self, parsed: dict[str, Any]) -> None: ...
 

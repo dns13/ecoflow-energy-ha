@@ -251,13 +251,16 @@ class SetupMixin(_Base):
         """Await the one cancellation-safe coordinator cleanup task."""
         if self._shutdown_task is None:
             self._shutdown = True
-            # PowerPulse 2 start/stop (ADR-009): a wallbox action awaiting
-            # confirmation belongs to a coordinator that is being torn down,
-            # same as every other in-flight write this guard protects.
-            if self._wallbox_action_pending is not None:
-                if not self._wallbox_action_pending.future.done():
-                    self._wallbox_action_pending.future.cancel()
-                self._wallbox_action_pending = None
+            # A settings write waiting for its turn or for a report sleeps on
+            # an event, not on the pending record cancelled below.
+            self._notify_settings_waiters()
+            # A device write awaiting confirmation (PowerPulse 2, ADR-009;
+            # PowerGlow, PLAN-190) belongs to a coordinator that is being torn
+            # down, same as every other in-flight write this guard protects.
+            if self._pending_write is not None:
+                if not self._pending_write.future.done():
+                    self._pending_write.future.cancel()
+                self._pending_write = None
             self._shutdown_task = self._entry.async_create_task(
                 self.hass,
                 self._async_shutdown_cleanup(),
@@ -283,6 +286,9 @@ class SetupMixin(_Base):
         self._stale_check_unsub = None
         self._credential_refresh_unsub = None
         self._powerocean_soc_debounce_unsub = None
+        # A stopped coordinator has nothing left to ask or restore on the
+        # Ocean 2 read-backs (Backup Reserve, Storm Guard).
+        self._cancel_ocean2_readback()
 
         # Invalidate every claimed cycle before waiting. A publish already
         # executing in HA's thread pool cannot be stopped by cancelling its

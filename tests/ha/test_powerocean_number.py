@@ -42,21 +42,24 @@ class TestGetNumberDefs:
     def test_powerocean_number_keys(self):
         """Two sliders every PowerOcean has, plus one power per scheduled
         task slot on each of the two families: the charge schedule and the
-        feed-to-grid schedule. The schedule ones are accessory-gated, so a
-        device without a schedule never sees them."""
+        feed-to-grid schedule, plus the PowerGlow heating rod's two setpoints.
+        The schedule and heating rod ones are accessory-gated, so a device
+        without a schedule or a rod never sees them."""
         defs = _get_number_defs(DEVICE_TYPE_POWEROCEAN)
         keys = {d.key for d in defs}
+        heating_rod = {"heating_rod_target_power_w", "heating_rod_target_temp_c"}
 
-        assert keys == {"backup_reserve", "solar_surplus_threshold"} | {
+        assert keys == {"backup_reserve", "solar_surplus_threshold"} | heating_rod | {
             f"{prefix}_{index}_power_w"
             for prefix in POWEROCEAN_SCHEDULE_PREFIXES
             for index in range(1, SCHEDULE_MAX_INDEX + 1)
         }
         schedule_heads = tuple(f"{prefix}_" for prefix in POWEROCEAN_SCHEDULE_PREFIXES)
-        assert not any(
-            d.accessory for d in defs if not d.key.startswith(schedule_heads)
-        )
-        assert all(d.accessory for d in defs if d.key.startswith(schedule_heads))
+        gated = [
+            d for d in defs if d.key.startswith(schedule_heads) or d.key in heating_rod
+        ]
+        assert not any(d.accessory for d in defs if d not in gated)
+        assert all(d.accessory for d in gated)
 
     def test_feed_schedule_power_declares_the_recorded_app_range(self):
         """100 W floor, 5000 W placeholder ceiling, 100 W step (#381).
@@ -1323,7 +1326,7 @@ class TestPowerOceanSocFlushLifecycle:
                 coordinator._powerocean_soc_generation,
                 coordinator._powerocean_soc_cycle_open,
                 dict(coordinator._powerocean_soc_before),
-                coordinator._powerocean_soc_rollback_generation,
+                coordinator._write_rollback_generation,
                 dict(coordinator._device_data),
                 list(coordinator.event_log),
             )
@@ -1353,7 +1356,7 @@ class TestPowerOceanSocFlushLifecycle:
             coordinator._powerocean_soc_generation,
             coordinator._powerocean_soc_cycle_open,
             dict(coordinator._powerocean_soc_before),
-            coordinator._powerocean_soc_rollback_generation,
+            coordinator._write_rollback_generation,
             dict(coordinator._device_data),
             list(coordinator.event_log),
         ) == shutdown_state
@@ -1424,7 +1427,7 @@ class TestPowerOceanSocFlushLifecycle:
                 dict(coordinator._device_data),
                 dict(coordinator.data),
                 list(coordinator.event_log),
-                coordinator._powerocean_soc_rollback_generation,
+                coordinator._write_rollback_generation,
             )
             assert not shutdown.done()
             mqtt.disconnect.assert_not_called()
@@ -1437,7 +1440,7 @@ class TestPowerOceanSocFlushLifecycle:
             dict(coordinator._device_data),
             dict(coordinator.data),
             list(coordinator.event_log),
-            coordinator._powerocean_soc_rollback_generation,
+            coordinator._write_rollback_generation,
         ) == after_shutdown
         assert not coordinator._powerocean_soc_write_tasks
         coordinator.async_update_listeners.assert_not_called()
@@ -1791,12 +1794,12 @@ class TestPowerOceanSocRollback:
     ) -> None:
         """Without this the slider shows the refused value for a further 5 s."""
         coordinator = self._make_coordinator(hass, enhanced_config_entry, set_ok=False)
-        before = coordinator._powerocean_soc_rollback_generation
+        before = coordinator._write_rollback_generation
 
         await self._drag(coordinator, 50, 90)
         await coordinator._flush_powerocean_soc()
 
-        assert coordinator._powerocean_soc_rollback_generation > before
+        assert coordinator._write_rollback_generation > before
 
 
 class TestPowerOceanSocRollbackUnderOverlap:
