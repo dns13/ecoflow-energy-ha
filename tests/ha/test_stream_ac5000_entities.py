@@ -299,8 +299,9 @@ class TestStreamAC5000TaskReadback:
 class TestStreamAC5000Definitions:
     def test_documented_totals(self) -> None:
         """The counts the README and the entity reference publish."""
-        # 58 since Battery Cycles (`32/50` field 14) joined the list.
-        assert len(STREAMAC5000_SENSORS) == 58
+        # 58 since Battery Cycles (`32/50` field 14) joined the list, 59
+        # since Home From Solar (`f12.1`).
+        assert len(STREAMAC5000_SENSORS) == 59
         assert len(STREAMAC5000_POWER_TO_ENERGY) == 5
 
     def test_the_pv_strings_wait_for_a_non_zero_reading(self) -> None:
@@ -399,9 +400,13 @@ class TestStreamAC5000Definitions:
             "pv3_w",
             "pv4_w",
             "ac_output_power_w",
+            "home_from_solar_w",
         }
         for definition in STREAMAC5000_SENSORS:
             if definition.key in zero_filled:
+                assert definition.accessory and definition.accessory_needs_nonzero, (
+                    definition.key
+                )
                 continue
             assert definition.accessory_needs_nonzero is False, definition.key
 

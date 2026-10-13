@@ -66,6 +66,8 @@ _PLACEHOLDERS = frozenset(
         "ES21TESTUNITBBBB",
         "ES22TESTUNITAAAA",
         "ES22TESTUNITBBBB",
+        # The Stream Ultra beside an ES22 in `es22_ultra_pv_pair_masked.json`.
+        "BK11TESTUNITBBBB",
     }
 )
 

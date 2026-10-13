@@ -134,9 +134,17 @@ _ES22_FIELD_MAP: dict[tuple[int, int], dict[str, tuple[str, str, float]]] = {
         # 308+130 = 438 = 876/2. Left out, a PV owner loses the whole
         # solar charge from the battery reading: two of those frames read
         # 34 W and 28 W into the pack and reported 0.
-        # `f12.1` also appears on that unit and stays unmapped: it does
-        # not close any node balance in the frames available.
+        # `.1` and `.3` are the other two edges out of the same MPPT node, to
+        # home and to grid. Together with `.2` they close it, `f11.3` halved:
+        # 314+103 = 417 = 834/2 and 449+2391+14 = 2854 = 5708/2 on the ES21
+        # pair captures, 133+34+20 = 187 = 374/2 on an ES22 linked to a Stream
+        # Ultra that carries the PV. The home node closes on `.1` (plus `.4`
+        # and `.6`) against `f11.1` halved in every frame of those captures,
+        # and `.3` (plus `.5`) closes the grid node against `f11.2` halved
+        # within the 0.5 W the half-watt rounding allows.
+        "12.1": ("home_from_solar_w", _TYPE_FLOAT, 1),
         "12.2": ("_mppt_to_batt_w", _TYPE_FLOAT, 1),
+        "12.3": ("_mppt_to_grid_w", _TYPE_FLOAT, 1),
         "12.4": ("home_from_batt_w", _TYPE_FLOAT, 1),
         "12.5": ("_batt_to_grid_w", _TYPE_FLOAT, 1),
         "12.6": ("home_from_grid_w", _TYPE_FLOAT, 1),
@@ -405,6 +413,11 @@ _ZERO_FILL_PATHS: dict[tuple[int, int], tuple[str, ...]] = {
         # of holding its last value; `ac_output_power_w` carries
         # `accessory_needs_nonzero` so the entity still waits for a load.
         "11.7",
+        # `.1` is absent whenever no solar flows to the house, which is a
+        # real zero like `.2`; unfilled, solar to home would hold its last
+        # daylight reading through the night. `.3` needs no fill: Grid Export
+        # Power treats an absent solar-to-grid edge as 0 W already.
+        "12.1",
         "12.2",
         "12.4",
         "12.5",
@@ -1001,6 +1014,7 @@ def _finalize(parsed: dict[str, Any]) -> dict[str, Any]:
     grid_to_socket = result.pop("_grid_to_socket_w", None)
     batt_to_socket = result.pop("_batt_to_socket_w", None)
     mppt_to_batt = result.pop("_mppt_to_batt_w", None)
+    mppt_to_grid = result.pop("_mppt_to_grid_w", None)
     solar_to_grid = result.pop("_solar_to_grid_w", None)
     solar_to_batt = result.pop("_solar_to_batt_w", None)
     home_from_grid = result.get("home_from_grid_w")
@@ -1020,7 +1034,11 @@ def _finalize(parsed: dict[str, Any]) -> dict[str, Any]:
     if isinstance(batt_to_grid, (int, float)):
         # A solar-to-grid edge only exists on a unit with PV attached; its
         # absence here means no such contribution, not an unknown one.
-        extra = float(solar_to_grid) if isinstance(solar_to_grid, (int, float)) else 0.0
+        extra = sum(
+            float(edge)
+            for edge in (solar_to_grid, mppt_to_grid)
+            if isinstance(edge, (int, float))
+        )
         result["grid_export_power_w"] = float(batt_to_grid) + extra
 
     # Signed battery power, positive is charge. All three zero-filled edges

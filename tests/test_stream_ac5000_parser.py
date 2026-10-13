@@ -183,7 +183,7 @@ class TestFlowEdges:
         assert "grid_import_power_w" not in result
         assert "grid_export_power_w" not in result
 
-    def test_the_solar_to_home_edge_is_not_mapped(self) -> None:
+    def test_field_8_does_not_reach_solar_to_home(self) -> None:
         """Field 8 appears in no captured frame, so its position is a guess.
 
         An inferred position reaching an accessory entity is a wrong reading
@@ -192,7 +192,8 @@ class TestFlowEdges:
         inner = _sub(12, encode_field_varint(4, 500) + encode_field_varint(8, 700))
         result = parse_stream_ac5000_message(_build_frame(254, 39, bytes(inner)))
         assert result is not None
-        assert "home_from_solar_w" not in result
+        # Solar to home is `.1`, zero-filled here; field 8 must not reach it.
+        assert result["home_from_solar_w"] == 0.0
 
     def test_solar_falls_to_zero_instead_of_latching(self) -> None:
         """The node total is filled, so sunset reports 0 rather than nothing.
@@ -1969,3 +1970,41 @@ def test_cycles_follow_the_lifetime_counters(path: Path, frames: int) -> None:
             checked += 1
     # Pinned per recording, so a walker that stops early fails here.
     assert checked == frames
+
+
+ULTRA_PAIR = FIXTURES / "es22_ultra_pv_pair_masked.json"
+
+
+def _ultra_pair_frames() -> dict[str, dict]:
+    """Parse every frame of the ES22 + Stream Ultra fixture, keyed by time."""
+    parsed = {}
+    for frame in _load(ULTRA_PAIR):
+        result = parse_stream_ac5000_message(bytes.fromhex(frame["hex"]))
+        parsed[frame["ts"]] = result or {}
+    return parsed
+
+
+class TestUltraPvPair:
+    """An ES22 that computes the system, linked with a Stream Ultra carrying PV.
+
+    The Ultra's strings reach the ES22 flow matrix as the MPPT edges `f12.1`
+    (to home), `.2` (to battery) and `.3` (to grid). App screenshot at 08:58:
+    system discharging 7 W, ES22 0 W, Ultra 7 W.
+    """
+
+    def test_solar_to_home_is_the_whole_house_load_in_daylight(self) -> None:
+        frames = _ultra_pair_frames()
+        for ts in ("08:42:58", "08:55:00", "08:55:05", "08:55:08"):
+            assert frames[ts]["home_from_solar_w"] == frames[ts]["home_w"], ts
+        assert frames["08:42:58"]["home_from_solar_w"] == 133.0
+
+    def test_solar_to_home_reads_zero_at_night(self) -> None:
+        """`.1` is absent with no sun; the fill must not hold a daylight value."""
+        assert _ultra_pair_frames()["21:55:13"]["home_from_solar_w"] == 0.0
+
+    def test_solar_export_counts_towards_grid_export(self) -> None:
+        """`.3` closes the grid node: `f11.2` = 39 half-watts at 08:42:58."""
+        frames = _ultra_pair_frames()
+        assert frames["08:42:58"]["grid_export_power_w"] == 20.0
+        # `.3` = 5 plus battery to grid `.5` = 2, against `f11.2` = 13.
+        assert frames["08:55:05"]["grid_export_power_w"] == 7.0
