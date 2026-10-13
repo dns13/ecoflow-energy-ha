@@ -251,13 +251,13 @@ class SetupMixin(_Base):
         """Await the one cancellation-safe coordinator cleanup task."""
         if self._shutdown_task is None:
             self._shutdown = True
-            # PowerPulse 2 start/stop (ADR-009): a wallbox action awaiting
-            # confirmation belongs to a coordinator that is being torn down,
-            # same as every other in-flight write this guard protects.
-            if self._wallbox_action_pending is not None:
-                if not self._wallbox_action_pending.future.done():
-                    self._wallbox_action_pending.future.cancel()
-                self._wallbox_action_pending = None
+            # A device write awaiting confirmation (PowerPulse 2, ADR-009;
+            # PowerGlow, PLAN-190) belongs to a coordinator that is being torn
+            # down, same as every other in-flight write this guard protects.
+            if self._pending_write is not None:
+                if not self._pending_write.future.done():
+                    self._pending_write.future.cancel()
+                self._pending_write = None
             self._shutdown_task = self._entry.async_create_task(
                 self.hass,
                 self._async_shutdown_cleanup(),

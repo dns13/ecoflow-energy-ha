@@ -43,6 +43,10 @@ from .ecoflow.const import (  # noqa: E402
     get_device_name,  # noqa: F401
     get_device_type,  # noqa: F401
 )
+from .ecoflow.energy_stream import (  # noqa: E402
+    POWERGLOW_TARGET_TEMP_C_MAX,
+    POWERGLOW_TARGET_TEMP_C_MIN,
+)
 from .ecoflow.parsers.delta_pro_ultra_proto import (
     MAX_PACKS as DELTAPROULTRA_MAX_PACKS,  # noqa: E402
 )
@@ -214,6 +218,11 @@ POWERPULSE2_MAX_CURRENT_WINDOW_S: float = 20.0
 # same generous Home Assistant service-call allowance as the maximum-current
 # window above, for the same reason - not a measured worst case.
 POWERPULSE2_CHARGE_CURRENT_WINDOW_S: float = 20.0
+# PLAN-190: the confirmation window for a PowerGlow heating rod write. The rod
+# reports the new value on its next 212/8 report; the read-back measured 0.5 to
+# 5.1 s over the recorded writes, so 20 s leaves the same generous Home
+# Assistant service-call allowance as the PowerPulse windows above.
+POWERGLOW_WRITE_WINDOW_S: float = 20.0
 # PLAN-146: the maximum current range, the owner's sweep on #7 covered end to
 # end (2026-09-10).
 POWERPULSE2_MAX_CURRENT_RANGE_A: tuple[int, int] = (6, 16)
@@ -679,6 +688,8 @@ class EcoFlowSelectDef:
     # that carries the state key, so a setting the device never reports gets
     # no select. See _watch_for_accessory() in select.py.
     accessory: bool = False
+    # Same meaning as on the number definition ("config" or "diagnostic").
+    entity_category: str | None = None
 
 
 # =====================================================================
@@ -2624,6 +2635,44 @@ POWEROCEAN_NUMBERS: list[EcoFlowNumberDef] = [
         5,
         enhanced_only=True,
     ),
+    # PowerGlow heating rod controls (#7, PLAN-190). The rod is an optional
+    # accessory: each control is created on the first 212/8 report of its own
+    # read-back key, so a PowerOcean without a rod gets none of them. The write
+    # waits for that same report, so the number shows what the rod holds and
+    # nothing in between. Same key as the matching diagnostic sensor, as the
+    # PowerPulse 2 setpoint has: a number and a sensor are separate platforms
+    # with separate translations.
+    #
+    # The declared ceiling is the highest any rod accepts (HF33); the entity
+    # narrows it to the rod's own serial prefix once the serial is reported
+    # (`_derived_bounds` in number.py). A whole watt is a valid value: the
+    # app prompt has no step, and the targets on file include 25, 125 and 326.
+    EcoFlowNumberDef(
+        "heating_rod_target_power_w",
+        "Heating Rod Target Power",
+        "heating_rod_target_power_w",
+        "W",
+        "mdi:water-boiler",
+        0,
+        9000,
+        1,
+        enhanced_only=True,
+        accessory=True,
+        entity_category="config",
+    ),
+    EcoFlowNumberDef(
+        "heating_rod_target_temp_c",
+        "Heating Rod Target Temperature",
+        "heating_rod_target_temp_c",
+        "°C",
+        "mdi:thermometer-chevron-up",
+        POWERGLOW_TARGET_TEMP_C_MIN,
+        POWERGLOW_TARGET_TEMP_C_MAX,
+        1,
+        enhanced_only=True,
+        accessory=True,
+        entity_category="config",
+    ),
 ]
 
 
@@ -2637,6 +2686,20 @@ POWEROCEAN_SELECTS: list[EcoFlowSelectDef] = [
         ("self_use", "ai_schedule"),
         icon="mdi:cog-transfer",
         enhanced_only=True,
+    ),
+    # PowerGlow heating rod: off, Solar surplus or Manual (#7, PLAN-190). The
+    # state is derived from the rod's run switch and mode on its 212/8 report
+    # (`heating_rod_operating_mode`), so the gate is that derived key and it
+    # needs no value map. Created on the first report, like the two numbers.
+    EcoFlowSelectDef(
+        "heating_rod_operating_mode",
+        "Heating Rod Mode",
+        "heating_rod_operating_mode",
+        ("off", "solar", "manual"),
+        icon="mdi:water-boiler",
+        enhanced_only=True,
+        accessory=True,
+        entity_category="config",
     ),
 ]
 
