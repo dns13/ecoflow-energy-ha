@@ -44,7 +44,7 @@ All notable changes to this project will be documented in this file.
 
 - Stream units and the STREAM AC 5000 show Battery Cycles, the charge cycles the battery management has counted for the unit's own pack, in Enhanced Mode. It is field 14 of the battery heartbeat, the field the Delta 3 reads as its cycle count, and it sits within one cycle of the lifetime charge over the full capacity: 4 against 4.7 on an AC 5000 and 141 against 141.7 on the Stream Ultra linked to it. Contributed by @dns13, whose diagnostics download of an AC 5000 linked with a Stream Ultra carried the field on both units. (Ref #536)
 
-- A STREAM AC 5000 gains Home From Solar, the house load covered by solar from its own strings or from a linked Stream. It is created once solar first feeds the house, so a unit without PV in its group never gets it. Mapped from a diagnostics download of an AC 5000 linked with a Stream Ultra that carries the PV, where it matches the whole house load in daylight and reads 0 W at night.
+- A STREAM AC 5000 gains Home From Solar, the house load covered by solar from its own strings or from a linked Stream. It is a diagnostic entity, disabled by default like Home From Battery and Home From Grid, and it is created only once solar has fed the house, so a unit without PV in its group never gets it. Contributed by @dns13: in his diagnostics download of an AC 5000 linked with a Stream Ultra that carries the PV, it matches the whole house load in daylight and reads 0 W at night. (Ref #536)
 
 ### Fixed
 
@@ -78,7 +78,7 @@ All notable changes to this project will be documented in this file.
 
 - Pressing Wallbox Start Charging on a PowerPulse 2 in Solar mode without enough solar surplus no longer ends in an error. The wallbox accepts the start and reports Paused by Charger until the surplus is there. The integration dropped that report and kept showing the previous status, so the press failed after 30 s although charging started by itself later. The press now returns once the wallbox reports `charging` or Paused by Charger, Wallbox Charging Status shows the paused state, and a press that gets neither within 30 s still fails. While the wallbox is paused by the charger, pressing Wallbox Start Charging or Wallbox Stop Charging is refused with a message naming that status, because they act on `finishing` and `charging` only. Reported by @Xygen with a timeline of the press and a diagnostics download. (Ref #515)
 
-- Grid Export Power on a STREAM AC 5000 with solar strings now includes the solar its own strings feed into the grid. Before, it counted only what the battery and third-party solar fed in, so it read too low whenever the unit's own solar went out to the grid: 20 W instead of 0 W on an AC 5000 linked with a Stream Ultra that carries the PV. Together with the battery's share it closes the device's own grid total.
+- Grid Export Power on a STREAM AC 5000 now includes the solar fed into the grid from its own strings or from a linked Stream. Before, it counted only what the battery and third-party solar fed in, so it read too low while that solar went to the grid: in one recorded frame it read 0 W while 20 W went out. The Grid Export Energy counter grows by that share from now on; past values are not changed. Found by @dns13 in his diagnostics download of an AC 5000 linked with a Stream Ultra that carries the PV. (Ref #536)
 
 ### Changed
 

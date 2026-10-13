@@ -413,12 +413,12 @@ _ZERO_FILL_PATHS: dict[tuple[int, int], tuple[str, ...]] = {
         # of holding its last value; `ac_output_power_w` carries
         # `accessory_needs_nonzero` so the entity still waits for a load.
         "11.7",
-        # `.1` and `.3` are absent whenever no solar flows that way, which is
-        # a real zero like `.2`; unfilled, solar to home would hold its last
-        # daylight reading through the night.
+        # `.1` is absent whenever no solar flows to the house, which is a
+        # real zero like `.2`; unfilled, solar to home would hold its last
+        # daylight reading through the night. `.3` needs no fill: Grid Export
+        # Power treats an absent solar-to-grid edge as 0 W already.
         "12.1",
         "12.2",
-        "12.3",
         "12.4",
         "12.5",
         "12.6",

@@ -404,6 +404,9 @@ class TestStreamAC5000Definitions:
         }
         for definition in STREAMAC5000_SENSORS:
             if definition.key in zero_filled:
+                assert definition.accessory and definition.accessory_needs_nonzero, (
+                    definition.key
+                )
                 continue
             assert definition.accessory_needs_nonzero is False, definition.key
 
