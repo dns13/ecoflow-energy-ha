@@ -239,6 +239,8 @@ class MqttIngestMixin(_Base):
             self._capture_raw_frame(topic, payload, None)
             if self.device_type in (DEVICE_TYPE_DELTA3, DEVICE_TYPE_WAVE3):
                 self._check_config_write_ack(payload)
+            elif self.device_type == DEVICE_TYPE_OCEAN2:
+                self._check_ocean2_ack(payload)
             return
 
         # A write, published by the vendor app and delivered to us because we
@@ -471,6 +473,62 @@ class MqttIngestMixin(_Base):
             ack.config_ok,
         )
         self._log_event("set_rejected", f"field={ack.action_id}")
+
+    def _check_ocean2_ack(self, payload: bytes) -> None:
+        """Report a refused Ocean 2 write (Paho thread).
+
+        The reply to the Backup Reserve is a `PropertyCmdAck` (254/38), the
+        reply to the Storm Guard an action acknowledgement (254/37) that
+        echoes its action id; both carry `cmd_ok` as a plain bool, so a
+        refusal is an absent or zero field. Nothing in either is parsed into
+        the store: it echoes the request, it does not report the device. The
+        set_reply topic is shared with the vendor app, so a reply only
+        counts as ours when it is the acknowledgement kind of a write this
+        integration has in flight (`_ocean2_writes` is assigned on the event
+        loop right before the publish and read here: a copy of the values is
+        one call, safe under CPython's GIL) and arrives within the last
+        30 s. A refused write is handed to the event loop, which puts its
+        pre-write value back.
+        """
+        from ..ecoflow.ocean2_commands import (
+            ACTION_STORM,
+            parse_ocean2_action_ack,
+            parse_ocean2_property_ack,
+        )
+
+        write = None
+        cmd_ok = None
+        for pending in list(self._ocean2_writes.values()):
+            cmd_ok = pending.parse_ack(payload)
+            if cmd_ok is not None:
+                write = pending
+                break
+        if cmd_ok is None:
+            # No write of ours in flight is waiting for this reply. It is still
+            # read, so a refusal of somebody else's write is logged as such.
+            cmd_ok = parse_ocean2_property_ack(payload)
+            if cmd_ok is None:
+                cmd_ok = parse_ocean2_action_ack(payload, ACTION_STORM)
+        if cmd_ok is None:
+            return
+        if cmd_ok:
+            _LOGGER.debug("Setting applied on %s", self.device_tag)
+            return
+
+        if write is None or not write.is_recent(time.monotonic()):
+            _LOGGER.debug(
+                "Device %s rejected a setting this integration did not send",
+                self.device_tag,
+            )
+            return
+
+        _LOGGER.warning(
+            "Device %s rejected a setting (%s) - the change was not applied",
+            self.device_tag,
+            write.label,
+        )
+        self._log_event("set_rejected", write.event_detail)
+        self.hass.loop.call_soon_threadsafe(self._ocean2_reject_write, write)
 
     def _parse_message(self, topic: str, payload: bytes) -> dict[str, Any] | None:
         """Parse an MQTT message payload."""

@@ -188,7 +188,7 @@ async def test_stop_while_charging_publishes_once_and_confirms_on_finishing(
     # "finishing" does confirm it.
     _apply_status(wallbox, 6)
     await task
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
 
 
 async def test_start_while_finishing_confirms_only_on_charging(
@@ -207,13 +207,13 @@ async def test_start_while_finishing_confirms_only_on_charging(
     # The future is checked directly: `wait_for` needs more than one loop
     # iteration to wake after `set_result`, so `task.done()` after one
     # `sleep(0)` is false either way and proves nothing.
-    pending = wallbox._wallbox_action_pending
+    pending = wallbox._pending_write
     assert pending is not None and not pending.future.done()
     assert not task.done()
 
     _apply_status(wallbox, 3)  # charging - confirms
     await task
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
 
 
 async def test_start_while_finishing_confirms_on_a_suspended_charger_frame(
@@ -242,7 +242,7 @@ async def test_start_while_finishing_confirms_on_a_suspended_charger_frame(
     _apply_status(wallbox, 4)  # suspended_charger - confirms
     # Bounded, so a mutation fails in seconds and not after the 30 s window.
     await asyncio.wait_for(task, timeout=2)
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
     assert _mqtt(oceans[0]).send_proto_set.call_count == 1
     assert _mqtt(wallbox).send_proto_set.call_count == 0
 
@@ -267,13 +267,13 @@ async def test_start_is_not_confirmed_by_a_preparing_frame(
     assert _mqtt(oceans[0]).send_proto_set.call_count == 1
 
     _apply_status(wallbox, 2)  # preparing - must not confirm
-    pending = wallbox._wallbox_action_pending
+    pending = wallbox._pending_write
     assert pending is not None and not pending.future.done()
     assert not task.done()
 
     _apply_status(wallbox, 4)  # suspended_charger - confirms
     await asyncio.wait_for(task, timeout=2)
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
 
 
 async def test_start_is_not_confirmed_by_a_stale_stored_status(
@@ -281,7 +281,7 @@ async def test_start_is_not_confirmed_by_a_stale_stored_status(
 ) -> None:
     """A confirming status already in the store does not confirm a start.
 
-    The check runs on the arriving frame (`_resolve_wallbox_action`), never on
+    The check runs on the arriving frame (`_resolve_pending_write`), never on
     `_device_data`. The store is set to "suspended_charger" and then to
     "charging" after the press, and a frame without `ev_charge_status` arrives
     each time: the press stays pending. Mutation this catches: resolving from
@@ -299,13 +299,13 @@ async def test_start_is_not_confirmed_by_a_stale_stored_status(
     for stale in ("suspended_charger", "charging"):
         wallbox._device_data["ev_charge_status"] = stale
         wallbox._apply_data({"ev_charge_power_w": 0.0})  # no status key
-        pending = wallbox._wallbox_action_pending
+        pending = wallbox._pending_write
         assert pending is not None and not pending.future.done(), stale
         assert not task.done(), stale
 
     _apply_status(wallbox, 4)  # an arriving suspended_charger frame confirms
     await asyncio.wait_for(task, timeout=2)
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
 
 
 async def test_stop_is_not_confirmed_by_a_suspended_charger_frame(
@@ -327,13 +327,13 @@ async def test_stop_is_not_confirmed_by_a_suspended_charger_frame(
     assert _mqtt(oceans[0]).send_proto_set.call_count == 1
 
     _apply_status(wallbox, 4)  # suspended_charger - must not confirm a stop
-    pending = wallbox._wallbox_action_pending
+    pending = wallbox._pending_write
     assert pending is not None and not pending.future.done()
     assert not task.done()
 
     _apply_status(wallbox, 6)  # finishing - confirms
     await asyncio.wait_for(task, timeout=2)
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
 
 
 async def test_start_in_solar_mode_without_surplus_then_charging_publishes_once(
@@ -364,7 +364,7 @@ async def test_start_in_solar_mode_without_surplus_then_charging_publishes_once(
     _apply_status(wallbox, 3)  # charging, later, after the press returned
     assert _mqtt(oceans[0]).send_proto_set.call_count == 1
     assert _mqtt(wallbox).send_proto_set.call_count == 0
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
     assert wallbox._device_data["ev_charge_status"] == "charging"
 
 
@@ -386,13 +386,13 @@ async def test_stop_while_charging_is_not_confirmed_by_another_charging_frame(
     assert _mqtt(oceans[0]).send_proto_set.call_count == 1
 
     _apply_status(wallbox, 3)  # still charging - must not confirm a stop
-    pending = wallbox._wallbox_action_pending
+    pending = wallbox._pending_write
     assert pending is not None and not pending.future.done()
     assert not task.done()
 
     _apply_status(wallbox, 1)  # available - confirms
     await task
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
 
 
 async def test_a_cancelled_press_clears_the_record(hass: HomeAssistant) -> None:
@@ -407,12 +407,12 @@ async def test_a_cancelled_press_clears_the_record(hass: HomeAssistant) -> None:
     task = asyncio.create_task(wallbox.async_set_powerpulse_charge_action("stop"))
     await asyncio.sleep(0.05)
     assert _mqtt(oceans[0]).send_proto_set.call_count == 1
-    assert wallbox._wallbox_action_pending is not None
+    assert wallbox._pending_write is not None
 
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
 
     # The next press goes through, and is not refused as in progress.
     task = asyncio.create_task(wallbox.async_set_powerpulse_charge_action("stop"))
@@ -436,7 +436,7 @@ async def test_shutdown_while_pending_cancels_the_wait(hass: HomeAssistant) -> N
     await wallbox.async_shutdown()
     with pytest.raises(asyncio.CancelledError):
         await task
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
     assert _mqtt(oceans[0]).send_proto_set.call_count == 1
 
     # A press on the torn-down coordinator raises rather than reporting
@@ -469,7 +469,7 @@ async def test_no_confirming_frame_times_out(hass: HomeAssistant) -> None:
 
     assert excinfo.value.translation_key == "powerpulse_action_not_confirmed"
     assert _mqtt(oceans[0]).send_proto_set.call_count == 1
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
 
 
 @pytest.mark.parametrize(
@@ -491,15 +491,14 @@ async def test_action_state_precondition_refuses(
     assert _mqtt(oceans[0]).send_proto_set.call_count == 0
 
 
-@pytest.mark.parametrize("action", ["start", "stop"])
-async def test_action_state_precondition_refuses_while_paused_by_the_charger(
-    hass: HomeAssistant, action: str
+async def test_start_is_refused_while_paused_by_the_charger(
+    hass: HomeAssistant,
 ) -> None:
-    """Neither action acts on "suspended_charger" (heartbeat field 1 = 4, #515).
+    """Start does not act on "suspended_charger" (heartbeat field 1 = 4, #515).
 
-    Start acts on "finishing" and stop on "charging" only. Mutation this
+    The wallbox already holds an accepted start in that state. Mutation this
     catches: adding "suspended_charger" to
-    `POWERPULSE2_CHARGE_ACTION_PRECONDITION[action]` (the press would send and
+    `POWERPULSE2_CHARGE_ACTION_PRECONDITION["start"]` (the press would send and
     this test would fail on the missing refusal).
     """
     _entry_obj, oceans, wallbox = _wire_entry(hass, [POWEROCEAN_DEVICE])
@@ -507,12 +506,89 @@ async def test_action_state_precondition_refuses_while_paused_by_the_charger(
     _apply_status(wallbox, 4)  # suspended_charger
 
     with pytest.raises(HomeAssistantError) as excinfo:
-        await wallbox.async_set_powerpulse_charge_action(action)
+        await wallbox.async_set_powerpulse_charge_action("start")
 
     assert excinfo.value.translation_key == "powerpulse_action_state"
     assert excinfo.value.translation_placeholders == {"status": "suspended_charger"}
     assert _mqtt(oceans[0]).send_proto_set.call_count == 0
     assert _mqtt(wallbox).send_proto_set.call_count == 0
+
+
+async def test_stop_while_paused_by_the_charger_sends_and_confirms_on_finishing(
+    hass: HomeAssistant,
+) -> None:
+    """Stop cancels a start that waits for solar surplus (#515 follow-up).
+
+    The app enables its charge slider in charging status 4 and sends the same
+    relayed stop (241/100, on_off_set 1) as in "charging". The press is
+    published once and still needs a fresh "finishing" to confirm; a repeated
+    "suspended_charger" frame does not. Mutation this catches: removing
+    "suspended_charger" from `POWERPULSE2_CHARGE_ACTION_PRECONDITION["stop"]`
+    (the press raises instead of publishing).
+    """
+    _entry_obj, oceans, wallbox = _wire_entry(hass, [POWEROCEAN_DEVICE])
+    _set_descriptor(wallbox)
+    _apply_status(wallbox, 4)  # suspended_charger
+
+    with patch(
+        "custom_components.ecoflow_energy.ecoflow.energy_stream.time.time",
+        return_value=1_700_000_000.0,
+    ):
+        expected_seq = int(1_700_000_000.0 * 1000) & 0x7FFFFFFF
+        expected = build_powerpulse_charge_action_payload(
+            "stop", DEV_ADDR, DEV_SN, seq=expected_seq
+        )
+        task = asyncio.create_task(wallbox.async_set_powerpulse_charge_action("stop"))
+        await asyncio.sleep(0.05)
+
+    assert _mqtt(oceans[0]).send_proto_set.call_count == 1
+    assert _mqtt(wallbox).send_proto_set.call_count == 0
+    assert _mqtt(oceans[0]).send_proto_set.call_args.args[0] == expected
+
+    _apply_status(wallbox, 4)  # still paused - must not confirm a stop
+    pending = wallbox._pending_write
+    assert pending is not None and not pending.future.done()
+
+    _apply_status(wallbox, 6)  # finishing - confirms
+    await asyncio.wait_for(task, timeout=2)
+    assert wallbox._pending_write is None
+
+
+async def test_own_route_stop_while_paused_by_the_charger_sends_and_confirms(
+    hass: HomeAssistant,
+) -> None:
+    """The own route (no PowerOcean in the entry) shares the stop set (#515).
+
+    Both app screens for a wallbox on its own topic show the charge switch on
+    in status 4. The press publishes the standalone stop once on the
+    wallbox's own client; a repeated 4 does not confirm, a 6 does. Mutation
+    this catches: removing "suspended_charger" from
+    `POWERPULSE2_CHARGE_ACTION_PRECONDITION["stop"]` (the press raises).
+    """
+    _entry_obj, _oceans, wallbox = _wire_entry(hass, [])
+    _apply_status(wallbox, 4)  # suspended_charger
+
+    with patch(
+        "custom_components.ecoflow_energy.ecoflow.energy_stream.time.time",
+        return_value=1_700_000_000.0,
+    ):
+        expected_seq = int(1_700_000_000.0 * 1000) & 0x7FFFFFFF
+        expected = build_powerpulse_standalone_charge_ctrl_payload(
+            "stop", wallbox.device_sn, seq=expected_seq
+        )
+        task = asyncio.create_task(wallbox.async_set_powerpulse_charge_action("stop"))
+        await asyncio.sleep(0.05)
+
+    assert _mqtt(wallbox).send_proto_set.call_count == 1
+    assert _mqtt(wallbox).send_proto_set.call_args.args[0] == expected
+
+    _apply_status(wallbox, 4)  # still paused - must not confirm a stop
+    pending = wallbox._pending_write
+    assert pending is not None and not pending.future.done()
+
+    _apply_status(wallbox, 6)  # finishing - confirms
+    await asyncio.wait_for(task, timeout=2)
+    assert wallbox._pending_write is None
 
 
 async def test_descriptor_missing_refuses(hass: HomeAssistant) -> None:
@@ -559,7 +635,7 @@ async def test_no_powerocean_in_entry_sends_on_the_wallbox_own_topic_and_confirm
 
     _apply_status(wallbox, 6)  # finishing - confirms
     await task
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
 
 
 async def test_own_route_start_from_finishing_confirms_on_charging(
@@ -578,7 +654,7 @@ async def test_own_route_start_from_finishing_confirms_on_charging(
 
     _apply_status(wallbox, 3)  # charging - confirms
     await task
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
 
 
 async def test_own_route_offline_refuses(hass: HomeAssistant) -> None:
@@ -616,7 +692,7 @@ async def test_own_route_publish_not_delivered_clears_the_record(
 
     assert excinfo.value.translation_key == "powerpulse_action_not_delivered"
     assert _mqtt(wallbox).send_proto_set.call_count == 1
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
 
     # A second press is refused for the same reason, not as "in progress" -
     # the failed record was cleared, not left behind.
@@ -666,7 +742,7 @@ async def test_a_torn_down_entry_sends_on_neither_route(
     assert _mqtt(wallbox).send_proto_set.call_count == 0
     for ocean in oceans:
         assert _mqtt(ocean).send_proto_set.call_count == 0
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
 
 
 async def test_sibling_offline_refuses(hass: HomeAssistant) -> None:
@@ -713,7 +789,7 @@ async def test_sibling_publish_not_delivered_clears_the_record(
 
     assert excinfo.value.translation_key == "powerpulse_action_not_delivered"
     assert _mqtt(oceans[0]).send_proto_set.call_count == 1
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None
 
 
 async def test_confirming_frame_during_the_publish_is_not_missed(
@@ -741,4 +817,4 @@ async def test_confirming_frame_during_the_publish_is_not_missed(
 
     await wallbox.async_set_powerpulse_charge_action("stop")
 
-    assert wallbox._wallbox_action_pending is None
+    assert wallbox._pending_write is None

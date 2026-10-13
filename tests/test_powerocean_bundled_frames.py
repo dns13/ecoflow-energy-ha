@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import pytest
+from ecoflow_energy.const import POWEROCEAN_SENSORS
 from ecoflow_energy.ecoflow.const import DEVICE_TYPE_POWEROCEAN
 from ecoflow_energy.ecoflow.parsers.powerocean_proto import (
     flatten_heartbeat,
@@ -113,6 +114,10 @@ def test_powerglow_report_maps_all_four_heating_rod_readings() -> None:
         "heating_rod_target_power_w": 2160.0,
         "heating_rod_water_temp_c": 69.0,
         "heating_rod_target_temp_c": 80.0,
+        "heating_rod_mode": 1,
+        "heating_rod_run_state": 1,
+        "heating_rod_operating_mode": "manual",
+        "heating_rod_sn": "X" * 16,
     }
 
 
@@ -128,6 +133,10 @@ def test_powerglow_idle_report_is_a_real_zero_watts() -> None:
         "heating_rod_target_power_w": 0.0,
         "heating_rod_water_temp_c": 56.0,
         "heating_rod_target_temp_c": 70.0,
+        "heating_rod_mode": 1,
+        "heating_rod_run_state": 1,
+        "heating_rod_operating_mode": "manual",
+        "heating_rod_sn": "X" * 16,
     }
 
 
@@ -148,6 +157,10 @@ def test_powerglow_target_power_is_not_an_echo_of_the_drawn_power() -> None:
         "heating_rod_target_power_w": 6510.0,
         "heating_rod_water_temp_c": 65.0,
         "heating_rod_target_temp_c": 80.0,
+        "heating_rod_mode": 1,
+        "heating_rod_run_state": 0,
+        "heating_rod_operating_mode": "off",
+        "heating_rod_sn": "X" * 16,
     }
 
 
@@ -169,20 +182,46 @@ def test_powerglow_field_map_holds_at_a_lower_draw() -> None:
         "heating_rod_target_power_w": 790.0,
         "heating_rod_water_temp_c": 74.0,
         "heating_rod_target_temp_c": 80.0,
+        "heating_rod_mode": 1,
+        "heating_rod_run_state": 1,
+        "heating_rod_operating_mode": "manual",
+        "heating_rod_sn": "X" * 16,
     }
 
 
-def test_powerglow_serial_never_reaches_a_sensor_key() -> None:
-    """The rod's own serial identifies the report and is not published."""
+def test_powerglow_serial_is_carried_for_writes_beside_the_mode_name() -> None:
+    """The rod's own serial is kept for the controls, which must address it.
+
+    Beside the derived operating-mode name it is the only string in the result,
+    under `heating_rod_sn`, which has no sensor entity; no reading key carries
+    it.
+    """
     results = decode_proto_runtime_headers(
         _build_header(212, 8, _PG_HEATING_PDATA), device_type=DEVICE_TYPE_POWEROCEAN
     )
     raw = {k: v for k, v in results[0].mapped.items() if not k.startswith("_")}
 
     assert raw["hr_sn"] == "X" * 16
-    assert not any(
-        isinstance(value, str) for value in remap_heating_rod_keys(raw).values()
-    )
+    strings = {
+        key: value
+        for key, value in remap_heating_rod_keys(raw).items()
+        if isinstance(value, str)
+    }
+    assert strings == {
+        "heating_rod_sn": "X" * 16,
+        "heating_rod_operating_mode": "manual",
+    }
+    # The serial and the three control keys feed the controls only: none of
+    # them has a sensor definition.
+    sensor_keys = {definition.key for definition in POWEROCEAN_SENSORS}
+    for key in (
+        "heating_rod_sn",
+        "heating_rod_mode",
+        "heating_rod_run_state",
+        "heating_rod_operating_mode",
+    ):
+        assert key not in sensor_keys
+    assert "heating_rod_power_w" in sensor_keys  # the control: the set is read
 
 
 def test_runtime_decodes_every_header_with_its_own_sequence() -> None:

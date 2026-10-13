@@ -585,6 +585,23 @@
       "backup_reserve_pct": {
         "name": "Backup-Reserve"
       },
+      "ems_control_mode": {
+        "name": "Steuerungsmodus",
+        "state": {
+          "none": "Keiner",
+          "soc_calibration": "SoC-Kalibrierung",
+          "storm_guard": "Sturmwächter",
+          "eco": "Eco",
+          "task": "Aufgabe",
+          "schedule": "Zeitplan",
+          "ac_backup": "AC-Backup",
+          "grid_operator": "Netzbetreiber",
+          "remote": "Fernsteuerung",
+          "standby": "Standby",
+          "frequency_response": "Frequenzregelung",
+          "third_party": "Drittanbieter"
+        }
+      },
       "max_charge_soc_pct": {
         "name": "Max. Lade-SoC"
       },
@@ -2903,6 +2920,9 @@
       },
       "ev_led_enabled": {
         "name": "Wallbox-LED-Anzeige"
+      },
+      "storm_guard": {
+        "name": "Sturmwächter"
       }
     },
     "number": {
@@ -2923,6 +2943,12 @@
       },
       "solar_surplus_threshold": {
         "name": "Solarüberschuss-Schwelle"
+      },
+      "heating_rod_target_power_w": {
+        "name": "Heizstab-Zielleistung"
+      },
+      "heating_rod_target_temp_c": {
+        "name": "Heizstab-Zieltemperatur"
       },
       "standby_timeout": {
         "name": "Standby-Zeitlimit"
@@ -3077,6 +3103,14 @@
           "custom": "Benutzerdefiniert"
         }
       },
+      "heating_rod_operating_mode": {
+        "name": "Heizstab-Modus",
+        "state": {
+          "off": "Aus",
+          "solar": "Solar",
+          "manual": "Manuell"
+        }
+      },
       "screen_timeout": {
         "name": "Bildschirm-Abschaltung",
         "state": {
@@ -3228,6 +3262,27 @@
     },
     "set_value_rejected": {
       "message": "{entity} kann nicht auf diesen Wert gesetzt werden: {reason}"
+    },
+    "powerglow_not_confirmed": {
+      "message": "Der Heizstab hat die neue Einstellung nicht innerhalb der erlaubten Zeit gemeldet. Seine Sensoren zeigen, was er meldet."
+    },
+    "powerglow_not_delivered": {
+      "message": "Der Heizstab-Befehl konnte nicht gesendet werden."
+    },
+    "powerglow_not_reported": {
+      "message": "Die PowerOcean hat den Heizstab noch nicht gemeldet. Warte auf ihren nächsten Bericht."
+    },
+    "powerglow_offline": {
+      "message": "Die Verbindung zur PowerOcean ist nicht aktiv, daher kann der Heizstab-Befehl nicht gesendet werden."
+    },
+    "powerglow_target_power_range": {
+      "message": "Der Heizstab nimmt eine Zielleistung zwischen {min} und {max} W an."
+    },
+    "powerglow_target_temp_range": {
+      "message": "Der Heizstab nimmt eine Zieltemperatur zwischen {min} und {max} °C an."
+    },
+    "powerglow_write_in_progress": {
+      "message": "Ein vorheriger Befehl wartet noch auf die Bestätigung durch den Heizstab. Versuche es erneut, sobald er ihn bestätigt hat."
     },
     "powerpulse_action_in_progress": {
       "message": "Ein vorheriger Befehl wartet noch auf die Bestätigung durch die Wallbox. Versuche es erneut, sobald sie ihn bestätigt hat."

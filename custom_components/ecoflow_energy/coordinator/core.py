@@ -87,6 +87,7 @@ if TYPE_CHECKING:
     from ..ecoflow.cloud_http import EcoFlowHTTPQuota
     from ..ecoflow.cloud_mqtt import EcoFlowMQTTClient
     from ..ecoflow.iot_api import IoTApiClient
+    from .set_commands import _Ocean2Write
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -102,10 +103,14 @@ class DeviceSnapshot:
 
 
 @dataclass(frozen=True)
-class WallboxActionPending:
-    """One PowerPulse 2 write awaiting device confirmation (ADR-009, PLAN-146).
+class PendingDeviceWrite:
+    """One device write awaiting confirmation (ADR-009, PLAN-146, PLAN-190).
 
-    `future` resolves with the confirming value when the wallbox reports it,
+    Written for the PowerPulse 2 and used the same way by the PowerGlow heating
+    rod writes on a PowerOcean (PLAN-190): nothing in the record or its
+    resolver is wallbox-specific except the start/stop status check below.
+
+    `future` resolves with the confirming value when the device reports it,
     or is cancelled on coordinator shutdown. `issued_at` is monotonic and is
     not currently compared against an ingest receive timestamp - the
     mqtt_ingest path does not stamp one (checked 2026-09-11), so the field is
@@ -119,10 +124,16 @@ class WallboxActionPending:
     not apply to a numeric setting. `expected_value` is `float | str | None`
     since PLAN-147: a numeric setting (max current) compares by tolerance,
     a string setting (charging mode) compares by equality - see
-    `_resolve_wallbox_action` in state_apply.py. `bit_mask` (PLAN-172) narrows
+    `_resolve_pending_write` in state_apply.py. `bit_mask` (PLAN-172) narrows
     an integer comparison to the masked bits: the settings switch bits carry
     several toggles in one byte, and a write of one of them is confirmed by
-    that bit alone, not by the whole byte matching.
+    that bit alone, not by the whole byte matching. `require` (PLAN-190) ties a
+    write to one source: a `(key, value)` pair that the arriving frame must
+    carry (the PowerGlow writes name their rod's serial), so a report from a
+    second rod on the same PowerOcean cannot confirm it. `settings_write`
+    (#495) marks a PowerPulse 2 settings write (display, switch bits, currents,
+    phase): a second settings write waits for it to finish instead of being
+    refused, while every other write still refuses at once.
     """
 
     action: str
@@ -131,6 +142,8 @@ class WallboxActionPending:
     state_key: str = "ev_charge_status"
     expected_value: float | str | None = None
     bit_mask: int | None = None
+    require: tuple[str, object] | None = None
+    settings_write: bool = False
 
 
 class EcoFlowDeviceCoordinator(
@@ -354,9 +367,10 @@ class EcoFlowDeviceCoordinator(
         # five second publish timeout would otherwise snapshot the optimistic
         # values of the write that is still failing.
         self._powerocean_soc_cycle_open: bool = False
-        # Set when a rollback lands, so the two sliders drop their optimistic
-        # lock instead of sitting on a value the device refused for 5 s.
-        self._powerocean_soc_rollback_generation: int = 0
+        # Advanced when a write is rolled back (the PowerOcean SoC sliders, the
+        # Ocean 2 reserve), so a number drops its optimistic lock instead of
+        # sitting on a value the device refused for 5 s.
+        self._write_rollback_generation: int = 0
         # Serializes every config write that has to read the device's current
         # state before it can build its frame. One coordinator drives one
         # device, so the ES22 and BK-series sequences can never both be in
@@ -372,11 +386,19 @@ class EcoFlowDeviceCoordinator(
         # fields lose one of the two changes by restoring a stale companion
         # over it.
         self._device_config_lock = asyncio.Lock()
-        # PowerPulse 2 start/stop (ADR-009): serializes the check-and-publish
-        # of one wallbox action so a second press cannot slip past the
-        # in-progress check before the first one's record is set.
-        self._wallbox_action_lock = asyncio.Lock()
-        self._wallbox_action_pending: WallboxActionPending | None = None
+        # One device write (PowerPulse 2 start/stop and settings, ADR-009;
+        # PowerGlow, PLAN-190): serializes the check-and-publish so a second
+        # press cannot slip past the in-progress check before the first one's
+        # record is set.
+        self._pending_write_lock = asyncio.Lock()
+        # Ocean 2 writes (PLAN-151, PLAN-192): `_apply_data` sets the event when
+        # a frame carrying the device's own SoC ratio (field 92) is stored, which
+        # is what a reserve write waits for after its get-all; the write records,
+        # one per state key, hold the pre-write value and the read-back timers of
+        # the writes in flight.
+        self._ocean2_snapshot_event = asyncio.Event()
+        self._ocean2_writes: dict[str, _Ocean2Write] = {}
+        self._pending_write: PendingDeviceWrite | None = None
         # PLAN-172: the latest settings report this wallbox's own connection
         # delivered, as (monotonic receive time, the settings keys that one
         # frame carried). A frame snapshot, never merged from the store, so a
@@ -384,6 +406,24 @@ class EcoFlowDeviceCoordinator(
         # report plus a mode of another. The work mode in it is a name
         # (fast, solar, custom, smart), the same words the heartbeat uses.
         self._settings_report: tuple[float, dict[str, Any]] | None = None
+        # #495: the settings writes that wait behind each other. `_settings_calls`
+        # lists the calls in flight, ticket -> write target (the action): a call
+        # whose ticket is gone was replaced by a newer call for the same target
+        # and ends without sending. `_settings_wake` is replaced and set
+        # whenever something a waiting call cares about changes (a call ended, a
+        # pending write cleared, a settings report recorded, a call replaced); a
+        # waiter takes it under the write lock and re-checks after it fires, so
+        # no change is missed.
+        self._settings_wake: asyncio.Event = asyncio.Event()
+        self._settings_write_seq: int = 0
+        self._settings_calls: dict[int, str] = {}
+        # Reports recorded so far, and how many there were when the last
+        # settings write left. A write builds its byte only from a report
+        # recorded after that one, so a write whose caller was cancelled after
+        # it was sent cannot be undone by the next write rebuilding from the
+        # report that came before it.
+        self._settings_report_seq: int = 0
+        self._settings_published_seq: int = 0
         self._credential_obtained_ts: float = 0.0
         self._credential_refresh_unsub: asyncio.TimerHandle | None = None
         self._event_log: deque[dict[str, Any]] = deque(maxlen=50)

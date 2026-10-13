@@ -2,7 +2,7 @@
 
 Full list of all entities created for the EcoFlow Ocean 2.
 
-**Totals:** 48 system sensors, plus 12 per battery module
+**Totals:** 51 system sensors, plus 12 per battery module; 1 number and 1 switch on the `RE11`
 
 The Ocean 2 reports through the account connection only, so it needs **Enhanced Mode**. The Developer API answers error 1006 for this device, the same position the `J32D`/`J32E` PowerOcean variants are in, so Standard Mode creates no usable entities.
 
@@ -10,11 +10,13 @@ Five serial prefixes, one device: `RE11` for the 10 kW unit, `RE17` for the 12 k
 
 `RE11` is confirmed on two installations, `RE41`, `RE42` and `RE43` on one each through owners' diagnostics downloads on #145. `RE17` is routed on EcoFlow's own device list, which separates it from the `RE11` by power rating alone; no frame from an `RE17` exists yet, so if you own one, a note either way is welcome.
 
-Read-only. No write frame from an Ocean 2 has been observed, so there are no controls.
+Read-only apart from two controls on the `RE11`: the Backup Reserve number and the Storm Guard switch, described below. No write frame for any other Ocean 2 setting has been observed, so there are no other controls, and the other four prefixes have none at all.
 
 Battery modules are read as well: 12 readings each, created once a module actually reports. The count is an installation choice - two on the unit this was mapped on - so nothing is declared for modules you do not have. Captures from other systems show bundles of up to fourteen per-module headers in one frame, a heartbeat backlog rather than fourteen distinct modules.
 
 **Despite the name, this is not a PowerOcean.** It carries its own telemetry frame on `cmd_func` 254 and shares no field layout with the `HJ31`/`J32x` line, which is why it has its own parser and its own entity set.
+
+Work Mode, System State and Control Mode come mostly with the unit's full status report rather than the frequent change reports, so they appear a little after the other readings. So far only Self-use, Running and None have been seen on a unit; the other states are named after the app's own definitions.
 
 ---
 
@@ -70,6 +72,9 @@ Battery modules are read as well: 12 readings each, created once a module actual
 | Grid Export Energy | kWh | - | enabled | For the Energy Dashboard's return-to-grid slot |
 | Battery Charge Energy | kWh | - | enabled | For the Energy Dashboard's battery slot |
 | Battery Discharge Energy | kWh | - | enabled | For the Energy Dashboard's battery slot |
+| Work Mode | - | diagnostic | enabled | Self-use or AI Schedule, as set in the app. Appears with the first full status report |
+| System State | - | diagnostic | enabled | Running, Idle, Stopped, Maintenance, Initializing, one of four Starting states or None, the same states the PowerOcean reports |
+| Control Mode | - | diagnostic | enabled | What currently overrides normal operation: None, Schedule, Task, Storm Guard, AC Backup, Eco and others. None means the work mode is in charge |
 
 ---
 
@@ -100,6 +105,30 @@ Each module creates 12 sensors (5 enabled by default, 7 disabled). They are crea
 | Module N Max Cell Voltage | mV |
 
 > **The module SoC carries no battery device class.** Home Assistant shows one battery figure per device, and that is the system state of charge at the top of this page. A per-module class would put up to sixteen competing battery icons on one device.
+
+---
+
+## Numbers
+
+`RE11` only. The number appears once the unit has reported its Backup Reserve, so a unit that never sends it gets no control.
+
+| Entity | Unit | Range | Description |
+|:---|:---:|:---:|:---|
+| Backup Reserve | % | 1 up to the unit's own charge reading, at most 100 | The charge level the battery keeps back instead of discharging into the house. A slider, in steps of 1 |
+
+The upper end of the slider is not a fixed 100. It follows a charge reading the unit sends itself: on a unit that reports 80 the slider stops at 80, and a request above that is refused before anything is sent. Until the unit has sent that reading the slider shows 1 to 100, and a write is refused as not ready. The lowest value is 1: it is the lowest the unit was seen acknowledging, and 0 was never sent.
+
+Each write first asks the unit for its current state, waiting up to 5 seconds, and sends the new reserve together with the unit's own current reading of that charge value. If the unit does not answer in time, the write is refused with a "not ready" message and nothing is sent. After a write the integration asks the unit again to confirm the value. If the unit refuses the write, or nothing confirms it within about 35 seconds, the control goes back to the value it had before. If the unit reports a different value, that value is shown.
+
+---
+
+## Switches
+
+`RE11` only. The switch appears once the unit has reported its storm guard setting, which it does in its full status report.
+
+| Entity | Category | Description |
+|:---|:---:|:---|
+| Storm Guard | config | The app's storm guard (Sturmwächter) on or off. The integration sends the same command as the app and keeps the new state only once the unit's next full status report shows it; if none does within about 35 seconds, the switch goes back to its previous state |
 
 ---
 
