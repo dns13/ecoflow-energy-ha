@@ -31,6 +31,8 @@ from ..const import (
     POWERPULSE2_MAX_CURRENT_WINDOW_S,
     POWERPULSE2_PHASE_SETTING_OPTIONS,
     POWERPULSE2_PHASE_SETTING_WIRE,
+    POWERPULSE2_RELAYED_DISPLAY_MAX_AGE_S,
+    POWERPULSE2_RELAYED_DISPLAY_WINDOW_S,
     POWERPULSE2_SETTINGS_FRESH_WAIT_S,
     POWERPULSE2_SETTINGS_MAX_AGE_S,
     POWERPULSE2_SETTINGS_WINDOW_S,
@@ -39,6 +41,8 @@ from ..const import (
 from ..ecoflow.const import (
     POWEROCEAN_FEED_SCHEDULE_POWER_MIN_W,
     POWEROCEAN_SCHEDULE_POWER_STEP_W,
+    POWERPULSE2_DISPLAY_BLOCK_LEN_KEY,
+    POWERPULSE2_DISPLAY_BLOCK_LENGTHS,
     POWERPULSE2_DISPLAY_BRIGHTNESS_STEPS,
     POWERPULSE2_DISPLAY_KEYS,
     POWERPULSE2_DISPLAY_SWITCH_KEYS,
@@ -124,13 +128,16 @@ class _SettingsWrite:
     bits of that reading count as the confirmation. `display` (PLAN-188) is
     the four known bytes of the display block, `(LED on, Screen on, LED
     brightness %, Screen brightness %)`: a display write sends that block
-    alone through its own builder and leaves `fields` empty.
+    alone through its own builder and leaves `fields` empty. `display_block_len`
+    is the form of the snapshot the block was built on (6, or the 32-byte form
+    a PowerOcean relays, #553) and is the form the write sends.
     """
 
     fields: dict[int, int]
     expected_value: float
     bit_mask: int | None = None
     display: tuple[int, int, int, int] | None = None
+    display_block_len: int = 6
 
     def __post_init__(self) -> None:
         if self.display is not None and self.fields:
@@ -2246,19 +2253,31 @@ class SetCommandsMixin(_Base):
         finally:
             self._clear_pending_write(record)
 
+    def _settings_limits(self) -> tuple[float, float]:
+        """`(oldest report age, read-back window)` of a settings write (#553).
+
+        A wallbox that has never sent its own settings report is read from the
+        PowerOcean's sparser copy, which gets the longer limits.
+        """
+        if self._own_settings_report_seen:
+            return POWERPULSE2_SETTINGS_MAX_AGE_S, POWERPULSE2_SETTINGS_WINDOW_S
+        return (
+            POWERPULSE2_RELAYED_DISPLAY_MAX_AGE_S,
+            POWERPULSE2_RELAYED_DISPLAY_WINDOW_S,
+        )
+
     def _fresh_settings_report(self) -> dict[str, Any]:
         """The latest settings report, if a write may be built on it (#495).
 
         Raises `_SettingsReportNotFresh` (`report_missing`, or `report_stale`)
-        when there is none, when it is older than
-        `POWERPULSE2_SETTINGS_MAX_AGE_S`, or when no report was recorded since
-        the last settings write started sending (the mark is set before the
-        send, so a send that was cancelled midway or not delivered counts
-        too): such a write may have changed the wallbox in a way the older
-        report does not show, and rebuilding the byte from that report would
-        send the old bits back. Waiting for the next report fixes all three,
-        except for a report the wallbox sent before applying the write
-        (ADR-009 addendum, point 4).
+        when there is none, when it is older than `_settings_limits`, or when
+        no report was recorded since the last settings write started sending
+        (the mark is set before the send, so a send that was cancelled midway
+        or not delivered counts too): such a write may have changed the
+        wallbox in a way the older report does not show, and rebuilding the
+        byte from that report would send the old bits back. Waiting for the
+        next report fixes all three, except for a report the wallbox sent
+        before applying the write (ADR-009 addendum, point 4).
         """
         report = self._settings_report
         if report is None:
@@ -2268,7 +2287,7 @@ class SetCommandsMixin(_Base):
             )
         received_at, values = report
         if (
-            time.monotonic() - received_at > POWERPULSE2_SETTINGS_MAX_AGE_S
+            time.monotonic() - received_at > self._settings_limits()[0]
             or self._settings_report_seq <= self._settings_published_seq
         ):
             raise _SettingsReportNotFresh(
@@ -2347,9 +2366,7 @@ class SetCommandsMixin(_Base):
             # An older call for this target that still waits ends now.
             self._notify_settings_waiters()
         queue_deadline = (
-            loop.time()
-            + POWERPULSE2_SETTINGS_WINDOW_S
-            + POWERPULSE2_SETTINGS_FRESH_WAIT_S
+            loop.time() + self._settings_limits()[1] + POWERPULSE2_SETTINGS_FRESH_WAIT_S
         )
         fresh_deadline: float | None = None
         try:
@@ -2432,6 +2449,7 @@ class SetCommandsMixin(_Base):
                                             dev_addr,
                                             dev_sn,
                                             sibling.device_sn,
+                                            block_len=write.display_block_len,
                                         )
                                     )
                                 else:
@@ -2514,7 +2532,7 @@ class SetCommandsMixin(_Base):
 
             try:
                 confirmed_value = await asyncio.wait_for(
-                    record.future, POWERPULSE2_SETTINGS_WINDOW_S
+                    record.future, self._settings_limits()[1]
                 )
             except TimeoutError:
                 last_reported = self._device_data.get(state_key)
@@ -2709,23 +2727,26 @@ class SetCommandsMixin(_Base):
         `ev_screen_brightness_pct` (`value` one of
         `POWERPULSE2_DISPLAY_BRIGHTNESS_STEPS`, an `int`; a non-integer
         value is refused with `powerpulse_display_brightness_invalid`, like any
-        value that is not one of the steps). The wallbox takes
-        the display as one six-byte value (field 21 of `EDevPileParamSet`),
-        so the write rebuilds `[LED on, Screen on, LED brightness, Screen
-        brightness, 0, 0]` from the latest settings report, changes the one
-        byte that is asked for and sends that block alone. The two trailing
-        bytes are the wallbox's own and are always sent as 0, never copied from
+        value that is not one of the steps). The wallbox takes the display as
+        one value (field 21 of `EDevPileParamSet`) in the form its latest
+        settings report used: six bytes, or the 32-byte form a PowerOcean
+        reports (#553). The write rebuilds `[LED on, Screen on, LED brightness,
+        Screen brightness, ...]` from that report, changes the one byte that is
+        asked for and sends that block alone, in the same form. The trailing
+        bytes are the wallbox's own and are always sent as the builder fixes
+        them (zeros, and 0x02 at index 4 in the 32-byte form), never copied from
         the report. A brightness is writable while the screen or the LED is
         off: the write does not look at the on/off state.
 
         The report is read at dispatch time inside the lock (`plan`), like the
         switch-bit write: refused when there is none (`report_missing`, waiting
-        helps), when it is older than `POWERPULSE2_SETTINGS_MAX_AGE_S`
-        (`report_stale`), or when a value in it is not one the builder can send
+        helps), when it is older than `_settings_limits` (`report_stale`), or
+        when a value in it is not one the builder can send
         or is absent from a settings report that was received
         (`report_unusable`: the parser leaves out a byte that is not a value
         the wallbox takes, and waiting does not help). Confirmed when
-        a frame arriving after the write reports `key` at the requested value;
+        a frame arriving after the write reports `key` at the requested value,
+        within `_settings_limits`;
         nothing is published optimistically. The refusal and confirmation texts
         reuse the `powerpulse_continuous_*` keys, as the three settings
         switches do.
@@ -2783,10 +2804,14 @@ class SetCommandsMixin(_Base):
                 block.append(int(reported))
             block[index] = target
             led_on, screen_on, led_pct, screen_pct = block
+            block_len = values.get(POWERPULSE2_DISPLAY_BLOCK_LEN_KEY, 6)
             return _SettingsWrite(
                 {},
                 float(target),
                 display=(led_on, screen_on, led_pct, screen_pct),
+                display_block_len=block_len
+                if block_len in POWERPULSE2_DISPLAY_BLOCK_LENGTHS
+                else 6,
             )
 
         await self._async_write_powerpulse_settings(

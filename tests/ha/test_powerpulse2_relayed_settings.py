@@ -127,14 +127,37 @@ async def test_relayed_settings_land_on_the_wallbox_and_nowhere_else(
     assert wallbox.relayed_settings_stats == {"applied": 1}
 
 
+@pytest.mark.parametrize("unseen_length", [31, 33])
 async def test_a_display_block_of_another_length_leaves_the_display_keys_out(
-    hass: HomeAssistant,
+    hass: HomeAssistant, unseen_length: int
 ) -> None:
-    """The second frame's display block is 32 bytes long: no byte position is
-    guessed on it, the other settings still arrive."""
-    _entry, oceans, wallbox = _wire_entry(hass, [POWEROCEAN_DEVICE])
+    """A display block of a length nobody has seen (31 or 33 bytes; the 6 and
+    32 byte forms decode): no byte position is guessed on it, the other
+    settings still arrive.
 
-    _relay(oceans[0], "after_test")
+    The second frame carries the 32-byte form, which decodes (control: the
+    display keys arrive from it unpatched); here its block is cut to 31 bytes
+    or padded to 33 on the way into the parser.
+    """
+    from custom_components.ecoflow_energy.ecoflow.parsers import powerpulse_proto
+
+    _entry, oceans, wallbox = _wire_entry(hass, [POWEROCEAN_DEVICE])
+    real_iter_fields = powerpulse_proto._iter_fields
+
+    def resized(data: bytes) -> Any:
+        for number, wire, raw in real_iter_fields(data):
+            if number == 21 and wire == 2 and len(raw) == 32:
+                raw = raw[:unseen_length] + bytes(max(0, unseen_length - 32))
+            yield number, wire, raw
+
+    control = oceans[0]._parse_message(_PO_TOPIC, _frame("after_test"))
+    assert control is not None
+    decoded = control[RELAYED_WALLBOX_SETTINGS_KEY][wallbox.device_sn]
+    assert decoded["_display_block_len"] == 32
+    assert "ev_led_enabled" in decoded
+
+    with patch.object(powerpulse_proto, "_iter_fields", resized):
+        _relay(oceans[0], "after_test")
 
     data = wallbox.device_data
     assert data["ev_settings_switch_bits"] == 19
@@ -291,8 +314,8 @@ async def test_a_display_write_is_built_on_the_relayed_display_block(
 async def test_a_relayed_report_past_the_max_age_refuses_like_an_own_one(
     hass: HomeAssistant,
 ) -> None:
-    """A relayed report 11 s old is too old for a switch-bit write, the same
-    10 s limit an own report has: the write refuses and publishes nothing."""
+    """A relayed report 61 s old is too old for a switch-bit write: the write
+    refuses and publishes nothing."""
     _entry, oceans, wallbox = _wire_entry(hass, [POWEROCEAN_DEVICE])
     _set_descriptor(wallbox)
     send = _mqtt(oceans[0]).send_proto_set
@@ -301,7 +324,7 @@ async def test_a_relayed_report_past_the_max_age_refuses_like_an_own_one(
     stamped = wallbox._settings_report[0]
 
     with (
-        patch(f"{_SET_COMMANDS}.time", SimpleNamespace(monotonic=lambda: stamped + 11)),
+        patch(f"{_SET_COMMANDS}.time", SimpleNamespace(monotonic=lambda: stamped + 61)),
         pytest.raises(HomeAssistantError) as excinfo,
     ):
         await _set_continuous(wallbox, True)
